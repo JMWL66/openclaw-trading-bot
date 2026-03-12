@@ -1523,9 +1523,7 @@
         let latestStatus = null;
         let latestOpenPosition = null;
         let latestMarketState = null;
-        const startTime = new Date('2026-03-10T12:00:00+09:00');
         const initialBalance = 10;
-        const displayCapital = 110;
         const majorCoins = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'ADA', 'LINK', 'AVAX', 'LTC'];
 
         function formatSigned(value, digits = 2) {
@@ -1534,6 +1532,7 @@
         }
 
         function formatRuntime(diffMs) {
+            if (diffMs < 0) return '--';
             const totalMinutes = Math.max(0, Math.floor(diffMs / 60000));
             const days = Math.floor(totalMinutes / 1440);
             const hours = Math.floor((totalMinutes % 1440) / 60);
@@ -1542,7 +1541,10 @@
             if (days > 0) {
                 return `${days}天 ${hours}小时`;
             }
-            return `${hours}小时 ${minutes}分`;
+            if (hours > 0) {
+                return `${hours}小时 ${minutes}分钟`;
+            }
+            return `${minutes}分钟`;
         }
 
         function formatLastRun(value) {
@@ -1585,7 +1587,12 @@
         }
 
         function updateRunTime() {
-            document.getElementById('runTime').textContent = formatRuntime(Date.now() - startTime.getTime());
+            if (tradingStartTime) {
+                const diffMs = tradingActive ? (Date.now() - tradingStartTime) : tradingElapsedWhenStopped;
+                document.getElementById('runTime').textContent = formatRuntime(diffMs);
+            } else {
+                document.getElementById('runTime').textContent = '--';
+            }
         }
 
         function findOpenPosition(trades, status) {
@@ -1705,6 +1712,8 @@
         let tradingStartTime = null;
         let tradingElapsedWhenStopped = 0;
         let tradingTimerInterval = null;
+        let sessionStartBalance = null;
+        let sessionStartTradeCount = 0;
 
         function formatElapsed(ms) {
             const totalSec = Math.floor(ms / 1000);
@@ -1730,10 +1739,16 @@
                 tradingActive = true;
                 tradingStartTime = Date.now();
                 tradingElapsedWhenStopped = 0;
+                sessionStartBalance = null; // 会在接下来的 loadData 中捕获
+                sessionStartTradeCount = latestTrades ? latestTrades.length : 0;
+                
                 label.textContent = '交易进行中';
                 chip.classList.add('is-active');
                 clock.textContent = '00:00:00';
                 tradingTimerInterval = setInterval(updateElapsedDisplay, 1000);
+                
+                updateRunTime();
+                loadData();
             } else {
                 // 停止交易
                 tradingActive = false;
@@ -1744,7 +1759,8 @@
                     clearInterval(tradingTimerInterval);
                     tradingTimerInterval = null;
                 }
-                // 时间保持在停止时的值，不重置
+                
+                updateRunTime();
             }
         }
 
@@ -2112,12 +2128,20 @@
 
                 const lastTrade = trades[trades.length - 1];
                 const currentBalance = Number(status?.equity) || Number(status?.balance) || Number(lastTrade?.balance) || initialBalance;
-                const totalPnl = currentBalance - displayCapital;
+                
+                if (tradingActive && sessionStartBalance === null) {
+                    sessionStartBalance = currentBalance;
+                }
+                
+                const baseCapital = sessionStartBalance !== null ? sessionStartBalance : currentBalance;
+                const totalPnl = (tradingActive || sessionStartBalance !== null) ? (currentBalance - baseCapital) : 0;
+                const tradesSinceStart = sessionStartTradeCount !== null ? Math.max(0, trades.length - sessionStartTradeCount) : 0;
+                const displayPositionPnl = (tradingActive || sessionStartBalance !== null) ? (openPosition ? marketState.pnl : 0) : 0;
 
-                updateMetric('currentBalance', `${currentBalance.toFixed(2)} USDT`, currentBalance >= displayCapital ? 'positive' : 'negative');
-                updateMetric('positionPnl', `${formatSigned(openPosition ? marketState.pnl : 0)} USDT`, openPosition ? (marketState.pnl >= 0 ? 'positive' : 'negative') : 'neutral');
-                updateMetric('totalPnl', `${formatSigned(totalPnl)} USDT`, totalPnl >= 0 ? 'positive' : 'negative');
-                updateMetric('totalTrades', String(trades.length).padStart(2, '0'), 'neutral');
+                updateMetric('currentBalance', `${currentBalance.toFixed(2)} USDT`, totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral'));
+                updateMetric('positionPnl', `${formatSigned(displayPositionPnl)} USDT`, displayPositionPnl > 0 ? 'positive' : (displayPositionPnl < 0 ? 'negative' : 'neutral'));
+                updateMetric('totalPnl', `${formatSigned(totalPnl)} USDT`, totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral'));
+                updateMetric('totalTrades', String(tradingActive || sessionStartBalance !== null ? tradesSinceStart : 0).padStart(2, '0'), 'neutral');
 
                 document.getElementById('marketTicker').textContent = marketSymbol;
                 document.getElementById('marketPrice').textContent = marketState.price ? `${marketState.price.toFixed(2)} USDT` : '--';
@@ -2125,9 +2149,9 @@
                 updateBroadcastFeed({
                     marketSymbol,
                     marketPrice: marketState.price,
-                    positionPnl: openPosition ? marketState.pnl : 0,
+                    positionPnl: displayPositionPnl,
                     totalPnl,
-                    trades,
+                    trades: trades.slice(sessionStartTradeCount),
                     strategy: displayStrategy,
                     status
                 });
