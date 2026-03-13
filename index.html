@@ -639,33 +639,50 @@
 
         .strategy-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 8px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+            padding: 8px 4px;
         }
 
         .strategy-panel {
             min-height: 250px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .strategy-item {
-            padding: 12px 13px;
+            padding: 24px 20px;
             border-radius: var(--radius-sm);
-            background: linear-gradient(180deg, rgba(7, 14, 28, 0.94), rgba(7, 14, 28, 0.66));
+            background: linear-gradient(135deg, rgba(7, 14, 28, 0.94), rgba(4, 8, 16, 0.8));
             border: 1px solid rgba(118, 167, 255, 0.16);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+        
+        .strategy-item:hover {
+            transform: translateY(-2px);
+            border-color: rgba(0, 247, 178, 0.4);
         }
 
         .strategy-item .label {
             color: var(--text-mute);
-            font-size: 0.74rem;
-            letter-spacing: 0.12em;
+            font-size: 0.85rem;
+            letter-spacing: 0.15em;
             text-transform: uppercase;
+            margin-bottom: 12px;
         }
 
         .strategy-item .value {
-            margin-top: 8px;
             font-family: 'Orbitron', sans-serif;
-            font-size: 1.16rem;
-            color: var(--text);
+            font-size: 1.35rem;
+            color: var(--cyan);
+            text-shadow: 0 0 10px rgba(51, 215, 255, 0.2);
         }
 
         .token-strip {
@@ -1399,14 +1416,6 @@
                 </section>
 
                 <section class="shell-card panel strategy-panel">
-                    <div class="panel-head">
-                        <div class="chart-meta">
-                            <div class="meta-pill">模型: MiniMax M2.5</div>
-                            <div class="meta-pill">交易所: Binance 合约</div>
-                            <div class="meta-pill" id="chartCapital">本金: 110 USDT 挑战</div>
-                        </div>
-                    </div>
-
                     <div class="strategy-grid">
                         <div class="strategy-item">
                             <div class="label">止盈策略</div>
@@ -1424,10 +1433,6 @@
                             <div class="label">开仓逻辑</div>
                             <div class="value" id="strategyPositionSize">--</div>
                         </div>
-                    </div>
-
-                    <div class="token-strip" id="watchlist">
-                        <span class="token-pill">加载中</span>
                     </div>
                 </section>
             </div>
@@ -1684,18 +1689,10 @@
 
         function updateStrategy(status) {
             const displayStrategy = resolveDisplayStrategy(status);
-            const coins = displayStrategy.coins;
             document.getElementById('strategyTakeProfit').textContent = displayStrategy.takeProfitText;
             document.getElementById('strategyStopLoss').textContent = displayStrategy.stopLossText;
             document.getElementById('strategyLeverage').textContent = displayStrategy.leverageText;
             document.getElementById('strategyPositionSize').textContent = displayStrategy.positionSizeText;
-            const watchlist = document.getElementById('watchlist');
-            if (!coins.length) {
-                watchlist.innerHTML = '<span class="token-pill">暂无监控币种</span>';
-                return;
-            }
-
-            watchlist.innerHTML = coins.map((coin) => `<span class="token-pill">${coin}</span>`).join('');
         }
 
         function updateStatus(status) {
