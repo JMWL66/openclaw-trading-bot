@@ -2334,10 +2334,13 @@
         async function loadData() {
             try {
                 const bust = `t=${Date.now()}`;
+                const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+                const basePath = isLocalhost ? 'http://127.0.0.1:5000/data/' : '';
+                
                 const [thoughts, trades, status] = await Promise.all([
-                    fetch(`thinking.json?${bust}`, { cache: 'no-store' }).then((res) => res.json()),
-                    fetch(`trades.json?${bust}`, { cache: 'no-store' }).then((res) => res.json()),
-                    fetch(`status.json?${bust}`, { cache: 'no-store' }).then((res) => res.json())
+                    fetch(`${basePath}thinking.json?${bust}`, { cache: 'no-store' }).then((res) => res.json()),
+                    fetch(`${basePath}trades.json?${bust}`, { cache: 'no-store' }).then((res) => res.json()),
+                    fetch(`${basePath}status.json?${bust}`, { cache: 'no-store' }).then((res) => res.json())
                 ]);
 
                 const displayStrategy = resolveDisplayStrategy(status);

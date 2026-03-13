@@ -7,7 +7,7 @@
 import json
 import os
 from pathlib import Path
-BASE_DIR = Path("/Users/sonic/.openclaw/workspace/trading-bot")
+BASE_DIR = Path(__file__).resolve().parent
 STATUS_FILE = BASE_DIR / "status.json"
 STRATEGY_V2_FILE = BASE_DIR / "strategy_v2.json"
 

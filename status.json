@@ -1,27 +1,50 @@
 {
-  "last_run": null,
-  "balance": 48.92,
-  "equity": 48.92,
+  "last_run": "2026-03-13 16:06:25",
+  "balance": 38.7154,
+  "equity": 38.7154,
   "unrealized_pnl": 0.0,
   "positions": 0,
   "open_positions": [],
-  "mode": "strategy-v2",
-  "watchlist": [],
+  "mode": "strategy-v4",
+  "watchlist": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "BNB",
+    "HYPE",
+    "PIXEL",
+    "XRP"
+  ],
   "top_signal": {
-    "symbol": null,
-    "direction": null,
+    "symbol": "HYPEUSDT",
+    "direction": "short",
     "score": null
   },
   "strategy_changes": [],
-  "events": [],
+  "events": [
+    "V4扫描 16:06:23",
+    "BTC: 方向不明",
+    "ETH: 方向不明",
+    "SOL: 方向不明",
+    "BNB: 方向不明",
+    "XRP: 方向不明"
+  ],
   "strategy_v2": {
-    "version": "趋势回调v2.0",
-    "takeProfit": "第一目标+4.0%卖50%，第二目标+8.0%全卖",
-    "stopLoss": "固定1.5% + 结构保护",
-    "leverage": "波动率<1.5%用10x，1.5-3%用7x，>3%用5x",
-    "positionSize": "单笔10%-15%仓位，最多3持仓",
-    "entryLogic": "MA趋势判断+4选3回调开仓",
-    "coins": [],
-    "topN": 5
+    "version": "狂暴动量v4.0",
+    "takeProfit": "+1.0%平50%移保本 / +2.5%全平",
+    "stopLoss": "主流1.0% / 山寨0.8%",
+    "leverage": "主流10-15x/山寨7-10x",
+    "positionSize": "10%仓位，最多3持仓",
+    "entryLogic": "3选2狙击：回归MA / 吞没形态 / 放量突破",
+    "coins": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "BNB",
+      "HYPE",
+      "PIXEL",
+      "XRP"
+    ],
+    "topN": 7
   }
 }

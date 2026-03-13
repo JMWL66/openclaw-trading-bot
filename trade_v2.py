@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-BASE_DIR = Path("/Users/sonic/.openclaw/workspace/trading-bot")
+BASE_DIR = Path(__file__).resolve().parent
 BASE_URL = "https://fapi.binance.com"
 USER_AGENT = "openclaw-momentum-sniper/4.0"
 STATUS_FILE = BASE_DIR / "status.json"
@@ -301,14 +301,14 @@ class CoinScorer:
         
         stable_coins = ['USDCUSDT', 'USDTUSDT', 'FDUSDUSDT', 'USD1USDT', 'USDDUSDT', 'TUSDUSDT', 'BUSDUSDT']
         
-        url = "https://api.binance.com/api/v3/ticker/24hr"
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         try:
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'Mozilla/5.0')
             with urllib.request.urlopen(req, timeout=10) as response:
                 tickers = json.loads(response.read().decode())
         except Exception as e:
-            print(f"获取现货数据失败: {e}")
+            print(f"获取合约数据失败: {e}")
             tickers = self.client.get_ticker_24h()
         
         usdt_pairs = [t for t in tickers if t.get("symbol", "").endswith("USDT") 
