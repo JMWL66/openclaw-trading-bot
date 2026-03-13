@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenClaw 24小时自动交易挑战</title>
+    <title>OpenClaw 48小时自动交易挑战</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1299,7 +1299,7 @@
                 <div class="eyebrow">自动合约交易引擎</div>
                 <h1 class="brand-title">
                     OpenClaw
-                    <span class="glow">24小时自动交易挑战</span>
+                    <span class="glow">48小时自动交易挑战</span>
                 </h1>
                 <p class="brand-subtitle">直播视角重排：让价格、策略、执行和 AI 思考同屏滚动，画面更有节奏。</p>
                 <div class="broadcast-ribbon">
@@ -1391,10 +1391,6 @@
                             <div class="panel-kicker">资金曲线</div>
                             <div class="panel-title">资产增长轨迹</div>
                             <div class="panel-desc">优先看资金变化。</div>
-                        </div>
-                        <div class="head-chip">
-                            <span id="chartModeLabel">12小时轨迹</span>
-                            <strong id="chartPrice">--</strong>
                         </div>
                     </div>
                     <div class="chart-container">
@@ -1517,7 +1513,6 @@
         let chart = null;
         let tradeSignature = '';
         let thoughtSignature = '';
-        let chartScope = '12h';
         let tradePanelMode = 'position';
         let latestTrades = [];
         let latestStatus = null;
@@ -1942,24 +1937,28 @@
                 }
             }
 
-            const cutoff = anchorMs - (12 * 60 * 60 * 1000);
-            const cutoffIndex = fullHistory.findIndex((point) => {
-                const date = new Date(String(point.time).replace(' ', 'T'));
-                return !Number.isNaN(date.getTime()) && date.getTime() >= cutoff;
-            });
-            if (cutoffIndex === -1) {
+        function buildChartSeries(trades) {
+            if (!trades || !trades.length) {
                 return {
-                    startLabel: formatChartTime(startTime),
-                    startBalance: initialBalance,
-                    history: fullHistory,
+                    startLabel: formatChartTime(tradingStartTime ? new Date(tradingStartTime) : new Date()),
+                    startBalance: sessionStartBalance !== null ? sessionStartBalance : initialBalance,
+                    history: []
                 };
             }
 
-            const startBalance = cutoffIndex > 0 ? fullHistory[cutoffIndex - 1].balance : initialBalance;
+            // 只取当前 session 开启以后的交易
+            const sessionTrades = trades.slice(sessionStartTradeCount || 0);
+            const history = sessionTrades.map((t) => ({
+                time: t.time,
+                balance: Number(t.balance) || sessionStartBalance || initialBalance
+            }));
+
+            const baseCapital = sessionStartBalance !== null ? sessionStartBalance : initialBalance;
+
             return {
-                startLabel: formatChartTime(new Date(cutoff)),
-                startBalance,
-                history: fullHistory.slice(cutoffIndex),
+                startLabel: formatChartTime(tradingStartTime ? new Date(tradingStartTime) : new Date()),
+                startBalance: baseCapital,
+                history,
             };
         }
 
@@ -1973,17 +1972,15 @@
 
         function updateChart(trades) {
             const ctx = document.getElementById('balanceChart').getContext('2d');
-            const series = buildChartSeries(trades, chartScope);
+            const series = buildChartSeries(trades);
             const labels = [series.startLabel, ...series.history.map((point) => formatChartTime(point.time))];
             const balances = [series.startBalance, ...series.history.map((point) => point.balance)];
-            document.getElementById('chartModeLabel').textContent = chartScope === '12h' ? '12小时轨迹' : '全时间轨迹';
+            
             const minBalance = Math.min(...balances);
             const maxBalance = Math.max(...balances);
             const dynamicRange = maxBalance - minBalance;
             const padding = Math.max(dynamicRange * 0.22, 0.3);
-            const pointRadius = chartScope === '12h'
-                ? (window.innerWidth <= 720 ? 3.2 : 2.6)
-                : (window.innerWidth <= 720 ? 2.2 : 1.6);
+            const pointRadius = window.innerWidth <= 720 ? 2.2 : 1.6;
             const gradient = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height || 260);
             gradient.addColorStop(0, 'rgba(0, 247, 178, 0.38)');
             gradient.addColorStop(1, 'rgba(0, 247, 178, 0.02)');
@@ -2079,7 +2076,6 @@
         function syncRotatingPanels() {
             const slot = Math.floor(Date.now() / 30000);
             tradePanelMode = slot % 2 === 0 ? 'position' : 'trades';
-            chartScope = slot % 2 === 0 ? '12h' : 'all';
             updateTradePanelMode();
             if (latestStatus) {
                 updatePositions(latestStatus, latestMarketState, latestTrades);
@@ -2145,7 +2141,7 @@
 
                 document.getElementById('marketTicker').textContent = marketSymbol;
                 document.getElementById('marketPrice').textContent = marketState.price ? `${marketState.price.toFixed(2)} USDT` : '--';
-                document.getElementById('chartPrice').textContent = marketState.price ? `${marketState.price.toFixed(2)}` : '--';
+                // remove 'chartPrice' since it was part of the 12h box
                 updateBroadcastFeed({
                     marketSymbol,
                     marketPrice: marketState.price,
