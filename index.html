@@ -1383,11 +1383,11 @@
 
             <div class="shell-card metric-card">
                 <div class="metric-top">
-                    <span>运行时长</span>
+                    <span>交易币种</span>
                     <div class="metric-orb neutral"></div>
                 </div>
-                <div class="metric-value neutral" id="runTime">--</div>
-                <div class="metric-note">本轮自动化运行时长</div>
+                <div class="metric-value neutral" id="tradingCoins" style="font-size: 1.15rem; line-height: 1.25;">--</div>
+                <div class="metric-note">当前监控/交易池</div>
             </div>
 
             <div class="shell-card metric-card">
@@ -1586,14 +1586,7 @@
             });
         }
 
-        function updateRunTime() {
-            if (tradingStartTime) {
-                const diffMs = tradingActive ? (Date.now() - tradingStartTime) : tradingElapsedWhenStopped;
-                document.getElementById('runTime').textContent = formatRuntime(diffMs);
-            } else {
-                document.getElementById('runTime').textContent = '--';
-            }
-        }
+
 
         function findOpenPosition(trades, status) {
             const statusPosition = Array.isArray(status?.open_positions) ? status.open_positions[0] : null;
@@ -1739,7 +1732,6 @@
                 clock.textContent = '00:00:00';
                 tradingTimerInterval = setInterval(updateElapsedDisplay, 1000);
                 
-                updateRunTime();
                 loadData();
             } else {
                 // 停止交易
@@ -1751,8 +1743,6 @@
                     clearInterval(tradingTimerInterval);
                     tradingTimerInterval = null;
                 }
-                
-                updateRunTime();
             }
         }
 
@@ -2087,7 +2077,7 @@
 
                 syncRotatingPanels();
                 updateThinking(thoughts);
-                updateTrades(trades, openTrade, openPosition);
+                updateTrades(trades.slice(sessionStartTradeCount), openTrade, openPosition);
                 updateStrategy(status);
                 updateStatus(status);
 
@@ -2107,6 +2097,9 @@
                 updateMetric('positionPnl', `${formatSigned(displayPositionPnl)} USDT`, displayPositionPnl > 0 ? 'positive' : (displayPositionPnl < 0 ? 'negative' : 'neutral'));
                 updateMetric('totalPnl', `${formatSigned(totalPnl)} USDT`, totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral'));
                 updateMetric('totalTrades', String(tradingActive || sessionStartBalance !== null ? tradesSinceStart : 0).padStart(2, '0'), 'neutral');
+                
+                const coinList = Array.isArray(displayStrategy?.coins) ? displayStrategy.coins : [];
+                document.getElementById('tradingCoins').textContent = coinList.length ? coinList.join(' / ') : '--';
 
                 document.getElementById('marketTicker').textContent = marketSymbol;
                 document.getElementById('marketPrice').textContent = marketState.price ? `${marketState.price.toFixed(2)} USDT` : '--';
@@ -2125,10 +2118,8 @@
             }
         }
 
-        updateRunTime();
         loadData();
         syncRotatingPanels();
-        setInterval(updateRunTime, 60000);
         setInterval(loadData, 5000);
         setInterval(syncRotatingPanels, 1000);
     </script>
