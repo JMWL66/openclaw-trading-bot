@@ -376,8 +376,81 @@
 
         .mini-matrix {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+
+        .coin-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(180deg, rgba(8, 16, 31, 0.94), rgba(6, 13, 24, 0.7));
+            border: 1px solid rgba(108, 183, 255, 0.12);
+            transition: border-color 0.2s ease;
+        }
+
+        .coin-row:hover {
+            border-color: rgba(0, 247, 178, 0.3);
+        }
+
+        .coin-icon {
+            font-size: 1.25rem;
+            width: 28px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .coin-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .coin-name {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.08em;
+        }
+
+        .coin-price {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.82rem;
+            color: var(--cyan);
+            margin-top: 1px;
+        }
+
+        .coin-stats {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+
+        .coin-change {
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+
+        .coin-change.up {
+            color: #00f7b2;
+            background: rgba(0, 247, 178, 0.1);
+        }
+
+        .coin-change.down {
+            color: #ff5f7e;
+            background: rgba(255, 95, 126, 0.1);
+        }
+
+        .coin-extra {
+            font-size: 0.58rem;
+            color: var(--text-mute);
+            letter-spacing: 0.04em;
         }
 
         .mini-card {
@@ -1343,16 +1416,50 @@
                     </div>
                 </div>
 
-                <div class="mini-matrix">
-                    <div class="mini-card">
-                        <span>市场行情</span>
-                        <strong id="marketTicker">SOLUSDT</strong>
-                        <small id="marketPrice">--</small>
+                <div class="mini-matrix" id="marketOverviewGrid">
+                    <div class="coin-row" id="coin-BTC">
+                        <div class="coin-icon">₿</div>
+                        <div class="coin-info">
+                            <div class="coin-name">BTC</div>
+                            <div class="coin-price" id="price-BTC">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-BTC">--</div>
+                            <div class="coin-extra" id="extra-BTC">资费 -- | 多空 --</div>
+                        </div>
                     </div>
-                    <div class="mini-card">
-                        <span>最近扫描</span>
-                        <strong id="systemLastRun">--</strong>
-                        <small>Binance 合约 / 每 1 分钟</small>
+                    <div class="coin-row" id="coin-ETH">
+                        <div class="coin-icon">Ξ</div>
+                        <div class="coin-info">
+                            <div class="coin-name">ETH</div>
+                            <div class="coin-price" id="price-ETH">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-ETH">--</div>
+                            <div class="coin-extra" id="extra-ETH">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                    <div class="coin-row" id="coin-SOL">
+                        <div class="coin-icon">◎</div>
+                        <div class="coin-info">
+                            <div class="coin-name">SOL</div>
+                            <div class="coin-price" id="price-SOL">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-SOL">--</div>
+                            <div class="coin-extra" id="extra-SOL">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                    <div class="coin-row" id="coin-BNB">
+                        <div class="coin-icon">◆</div>
+                        <div class="coin-info">
+                            <div class="coin-name">BNB</div>
+                            <div class="coin-price" id="price-BNB">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-BNB">--</div>
+                            <div class="coin-extra" id="extra-BNB">资费 -- | 多空 --</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1694,7 +1801,7 @@
         }
 
         function updateStatus(status) {
-            document.getElementById('systemLastRun').textContent = formatLastRun(status?.last_run);
+            // systemLastRun element removed in market panel redesign
         }
 
         // ===== 手动交易状态切换 =====
@@ -2060,6 +2167,63 @@
             }
         }
 
+        // ===== 市场总览：BTC/ETH/SOL/BNB 实时行情 =====
+        const MARKET_COINS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+        const COIN_LABELS = { BTCUSDT: 'BTC', ETHUSDT: 'ETH', SOLUSDT: 'SOL', BNBUSDT: 'BNB' };
+
+        async function fetchMarketOverview() {
+            try {
+                const [tickerRes, fundingRes, ratioRes] = await Promise.allSettled([
+                    fetch('https://fapi.binance.com/fapi/v1/ticker/24hr').then(r => r.json()),
+                    Promise.all(MARKET_COINS.map(s =>
+                        fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${s}`).then(r => r.json())
+                    )),
+                    Promise.all(MARKET_COINS.map(s =>
+                        fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${s}&period=5m&limit=1`).then(r => r.json())
+                    )),
+                ]);
+
+                const tickers = tickerRes.status === 'fulfilled' ? tickerRes.value : [];
+                const fundings = fundingRes.status === 'fulfilled' ? fundingRes.value : [];
+                const ratios = ratioRes.status === 'fulfilled' ? ratioRes.value : [];
+
+                MARKET_COINS.forEach((symbol, idx) => {
+                    const label = COIN_LABELS[symbol];
+                    const ticker = Array.isArray(tickers) ? tickers.find(t => t.symbol === symbol) : null;
+                    const funding = fundings[idx];
+                    const ratio = Array.isArray(ratios[idx]) && ratios[idx].length ? ratios[idx][0] : null;
+
+                    // Price
+                    const priceEl = document.getElementById(`price-${label}`);
+                    if (priceEl && ticker) {
+                        const price = parseFloat(ticker.lastPrice);
+                        priceEl.textContent = price >= 1000 ? price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : price.toFixed(2);
+                    }
+
+                    // 24h change %
+                    const changeEl = document.getElementById(`change-${label}`);
+                    if (changeEl && ticker) {
+                        const pct = parseFloat(ticker.priceChangePercent);
+                        changeEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                        changeEl.className = 'coin-change ' + (pct >= 0 ? 'up' : 'down');
+                    }
+
+                    // Funding rate + long/short ratio
+                    const extraEl = document.getElementById(`extra-${label}`);
+                    if (extraEl) {
+                        const fr = funding?.lastFundingRate ? (parseFloat(funding.lastFundingRate) * 100).toFixed(4) + '%' : '--';
+                        const ls = ratio?.longShortRatio ? parseFloat(ratio.longShortRatio).toFixed(2) : '--';
+                        extraEl.textContent = `资费 ${fr} | 多空 ${ls}`;
+                    }
+                });
+            } catch (e) {
+                console.warn('Market overview fetch error:', e);
+            }
+        }
+
+        fetchMarketOverview();
+        setInterval(fetchMarketOverview, 10000);
+
         async function loadData() {
             try {
                 const bust = `t=${Date.now()}`;
@@ -2117,9 +2281,7 @@
                 const coinList = Array.isArray(displayStrategy?.coins) ? displayStrategy.coins : [];
                 document.getElementById('tradingCoins').textContent = coinList.length ? coinList.join(' / ') : '--';
 
-                document.getElementById('marketTicker').textContent = marketSymbol;
-                document.getElementById('marketPrice').textContent = marketState.price ? `${marketState.price.toFixed(2)} USDT` : '--';
-                // remove 'chartPrice' since it was part of the 12h box
+
                 updateBroadcastFeed({
                     marketSymbol,
                     marketPrice: marketState.price,
