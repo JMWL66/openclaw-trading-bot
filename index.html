@@ -1909,34 +1909,6 @@
             }).join('');
         }
 
-        function buildChartSeries(trades, scope) {
-            const fullHistory = Array.isArray(trades)
-                ? trades.map((trade) => ({
-                    time: trade.time || '--',
-                    balance: Number(trade.balance) || initialBalance
-                }))
-                : [];
-
-            if (scope !== '12h') {
-                return {
-                    startLabel: formatChartTime(startTime),
-                    startBalance: initialBalance,
-                    history: fullHistory,
-                };
-            }
-
-            // Use the last available trade time as the anchor for "last 12 hours".
-            // If the dataset is stale (no trades in the past 12h), anchoring to Date.now()
-            // would make 12h mode fall back to full history and look like "no switching".
-            let anchorMs = Date.now();
-            for (let i = fullHistory.length - 1; i >= 0; i -= 1) {
-                const candidate = new Date(String(fullHistory[i].time).replace(' ', 'T'));
-                if (!Number.isNaN(candidate.getTime())) {
-                    anchorMs = candidate.getTime();
-                    break;
-                }
-            }
-
         function buildChartSeries(trades) {
             if (!trades || !trades.length) {
                 return {
