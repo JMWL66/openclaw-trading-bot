@@ -1879,24 +1879,64 @@
             }
         }
 
-        function updateBroadcastFeed({ marketSymbol, marketPrice, positionPnl, totalPnl, trades, strategy, status }) {
-            const coinList = Array.isArray(strategy?.coins) ? strategy.coins : [];
-            const coins = coinList.length ? coinList.join(' / ') : '--';
-            const modeLabel = coinList.length && coinList.every((coin) => majorCoins.includes(String(coin).toUpperCase()))
-                ? '主流币池'
-                : '监控';
-            const items = [
-                '<span class="pulse"></span><strong>直播</strong>',
-                `市场 <strong>${marketSymbol || '--'}</strong>`,
-                `价格 <strong>${marketPrice ? `${marketPrice.toFixed(2)} USDT` : '--'}</strong>`,
-                `持仓 <strong>${formatSigned(positionPnl)} USDT</strong>`,
-                `总收益 <strong>${formatSigned(totalPnl)} USDT</strong>`,
-                `成交 <strong>${trades.length}</strong>`,
-                `${modeLabel} <strong>${coins}</strong>`,
-                `最近扫描 <strong>${formatLastRun(status?.last_run)}</strong>`
-            ];
+        // ===== 直播弹幕式滚动条幅 =====
+        const BROADCAST_LINES = [
+            // 互动欢迎
+            '🎙️ 欢迎来到小OC的直播间！点个关注不迷路~',
+            '🎉 新进来的观众朋友们，小OC给你们比心 ❤️',
+            '👋 各位大佬晚上好！AI交易员小OC在线营业中~',
+            '🔥 直播间人气越来越旺了！感谢各位的陪伴',
+            '💬 有问题弹幕扣1，小OC看到会回复哦',
+            '🌟 感谢 *** 进入直播间！欢迎欢迎~',
+            '🎊 直播间的兄弟们，今天咱们一起见证奇迹！',
+            '📢 关注小OC，每天直播AI自动交易实况！',
+            // 搞笑文案
+            '🤖 别人的AI写诗画画，我的AI在币圈搬砖',
+            '💰 我不是在赚钱，就是在亏钱的路上（狗头）',
+            '📊 AI说：我分析了一万根K线，结论是...再看看',
+            '🧠 小OC的脑子比你的基金经理靠谱（大概）',
+            '😂 观众：你这AI靠谱吗？小OC：你觉得呢？',
+            '🎰 有人炒币靠运气，小OC靠的是...也有一点运气',
+            '🐶 狗庄别跑！小OC的AI盯上你了',
+            '☕ 让AI干活，我喝咖啡，这就是科技的力量',
+            '🤔 AI：我觉得该买了。我：你上次也是这么说的',
+            '💸 赚了是AI厉害，亏了是市场的错（理直气壮）',
+            '🎪 今日直播节目：看AI如何在币圈翻云覆雨',
+            '🐸 心态好的观众请扣 666，心态崩了的扣 SOS',
+            '🍜 别问我赚了多少，问就是还没退出',
+            '🦊 小OC的交易秘诀：该出手时就出手，不该出手时...看戏',
+            // 交易金句
+            '📈 交易第一铁律：永远不要All In',
+            '🛡️ 止损是交易者的安全气囊，永远不要拆掉它',
+            '⏰ 耐心等待是交易中最难也最值钱的技能',
+            '🎯 好的交易不是赚得多，而是亏得少',
+            '💡 趋势是你的朋友——直到它转弯的那一秒',
+            '📉 会买的是徒弟，会卖的才是师傅',
+            '🏆 长期稳定盈利 > 一次暴赚十次暴亏',
+            '🧘 控制情绪 = 控制风险 = 控制利润',
+            '🔑 资金管理决定你能在市场活多久',
+            '🎓 不懂的币不碰，看不懂的行情不做',
+        ];
 
-            const html = items.map((item) => `<div class="broadcast-item">${item}</div>`).join('');
+        let lastBroadcastIndex = 0;
+        function updateBroadcastFeed({ marketSymbol, marketPrice, positionPnl, totalPnl, trades, strategy, status }) {
+            // 每次从语料库中选 5-6 条随机组合
+            const shuffled = [...BROADCAST_LINES].sort(() => Math.random() - 0.5);
+            const selected = shuffled.slice(0, 5);
+
+            // 穿插 1~2 条实时数据
+            const dataItems = [];
+            if (marketPrice) dataItems.push(`📊 <strong>${marketSymbol}</strong> 实时价格 <strong>${marketPrice.toFixed(2)} USDT</strong>`);
+            if (totalPnl !== 0) dataItems.push(`💰 本轮总收益 <strong>${formatSigned(totalPnl)} USDT</strong>`);
+            if (trades && trades.length > 0) dataItems.push(`⚡ 已完成 <strong>${trades.length}</strong> 笔交易`);
+
+            const dataInsert = dataItems.length ? [dataItems[Math.floor(Math.random() * dataItems.length)]] : [];
+
+            // 在中间插入一条数据
+            const half = Math.floor(selected.length / 2);
+            const items = [...selected.slice(0, half), ...dataInsert, ...selected.slice(half)];
+
+            const html = items.map(item => `<div class="broadcast-item">${item}</div>`).join('');
             document.getElementById('broadcastTrack').innerHTML = html;
             document.getElementById('broadcastTrackClone').innerHTML = html;
         }
