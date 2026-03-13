@@ -81,10 +81,16 @@ class Config:
     # 仓位
     max_concurrent_positions: int = 3
     position_size_pct: float = 0.10
-    # 杠杆
-    default_leverage: int = 10
+    # 杠杆 — 主流币(BTC/ETH) 10-15x, 山寨币 7-10x
+    leverage_major_low: int = 10
+    leverage_major_high: int = 15
+    leverage_alt_low: int = 7
+    leverage_alt_high: int = 10
     greedy_leverage: int = 20
     greedy_streak: int = 3
+    # 微利保护
+    micro_profit_trigger: float = 0.006   # 盈利 0.6% 后开始监控
+    micro_profit_floor: float = 0.003     # 回撤至 0.3% 强制保本平仓
     # 止盈
     tp1_pct: float = 0.010        # 1.0% 净利平50%
     tp1_close_pct: float = 0.5
@@ -582,6 +588,15 @@ class TradingBot:
             "🧾 {coin} 1%止盈，平一半！止损移至保本，安心坐等 ✌️",
             "🧾 {coin} 触发第一目标，减仓50%，锁利继续！",
         ],
+        "close_micro_profit": [
+            "🧾 {coin} 微利保护触发！盈利回撤到0.3%，果断保本出局！",
+            "🧾 {coin} 差点到嘴的鸭子飞了，微利保护平仓！",
+        ],
+        "position_full": [
+            "😤 由于仓位已满，错过 {coin} 信号，可惜了！",
+            "😤 {coin} 出现信号但3仓已满！只能眼睁睁看着机会溜走...",
+            "😤 仓位爆满！{coin} 的机会只能放弃了，下次一定！",
+        ],
         "no_signal": [
             "😴 这一轮没找到好机会，继续蹲守...",
             "😴 市场太安静了，AI先打个盹...",
@@ -660,7 +675,7 @@ class TradingBot:
         open_positions, total_unrealized = self.build_open_positions()
 
         is_greedy = self.consecutive_wins >= self.config.greedy_streak
-        lev_label = f"{'🔥20x狂暴' if is_greedy else '10x标准'}"
+        lev_label = f"{'🔥20x狂暴' if is_greedy else '主流10-15x/山寨7-10x'}"
 
         status.update({
             "last_run": self.now_str(),
@@ -726,11 +741,23 @@ class TradingBot:
                 return True
         return False
     
-    def get_current_leverage(self) -> int:
-        """根据连胜状态返回杠杆倍数"""
+    def get_current_leverage(self, symbol: str) -> int:
+        """根据连胜状态和币种类型返回杠杆倍数"""
         if self.consecutive_wins >= self.config.greedy_streak:
             return self.config.greedy_leverage
-        return self.config.default_leverage
+        # 主流币(BTC/ETH) 10-15x，山寨币 7-10x
+        if symbol in ["BTCUSDT", "ETHUSDT"]:
+            low, high = self.config.leverage_major_low, self.config.leverage_major_high
+        else:
+            low, high = self.config.leverage_alt_low, self.config.leverage_alt_high
+        # 根据波动率选择：低波动用高杠杆，高波动用低杠杆
+        klines = self.client.get_klines(symbol, "1m", 15)
+        vol = TechnicalIndicators.volatility(klines, 15) if klines else 0
+        if vol < 0.5:
+            return high
+        elif vol > 1.5:
+            return low
+        return (low + high) // 2
     
     def open_position(self, symbol: str, direction: str) -> bool:
         now = time.time()
@@ -742,6 +769,8 @@ class TradingBot:
                 return False
         
         if len(self.positions) >= self.config.max_concurrent_positions:
+            coin = symbol.replace('USDT', '')
+            self.add_thought(self.pick_comment("position_full", coin=coin))
             return False
         if symbol in self.positions:
             return False
@@ -755,7 +784,7 @@ class TradingBot:
             return False
         
         price = klines[-1]["close"]
-        lev = self.get_current_leverage()
+        lev = self.get_current_leverage(symbol)
         size = bal * self.config.position_size_pct * lev / price
         
         # 设置逐仓 + 杠杆
@@ -779,6 +808,7 @@ class TradingBot:
                     "qty": size,
                     "leverage": lev,
                     "open_time": now,
+                    "peak_pnl_pct": 0.0,
                 }
                 self.last_trade[symbol] = now
                 coin = symbol.replace('USDT', '')
@@ -899,6 +929,18 @@ class TradingBot:
                     print(f"{symbol} TP1触发，减仓50%，止损移至保本")
                 except Exception as e:
                     print(f"TP1减仓失败: {e}")
+            
+            # 微利保护: 盈利达0.6%后，记录峰值；回撤至0.3%强制保本
+            if pnl_pct > pos.get("peak_pnl_pct", 0):
+                pos["peak_pnl_pct"] = pnl_pct
+            
+            if (pos.get("peak_pnl_pct", 0) >= self.config.micro_profit_trigger
+                    and pnl_pct <= self.config.micro_profit_floor
+                    and "tp1_triggered" not in pos):
+                coin = symbol.replace('USDT', '')
+                self.add_thought(self.pick_comment("close_micro_profit", coin=coin))
+                self.close_position(symbol, "micro_profit_protect")
+                continue
     
     def scan_and_trade(self) -> tuple[list[str], Optional[dict[str, Any]]]:
         events = []
