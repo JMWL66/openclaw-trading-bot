@@ -1,7 +1,7 @@
 {
-  "last_run": "2026-03-13 16:31:25",
-  "balance": 38.7154,
-  "equity": 38.7154,
+  "last_run": "2026-03-13 16:34:30",
+  "balance": 38.7153,
+  "equity": 38.7153,
   "unrealized_pnl": 0.0,
   "positions": 0,
   "open_positions": [],
@@ -11,25 +11,24 @@
     "ETH",
     "SOL",
     "BNB",
-    "ALPACA",
-    "BNX",
-    "ALPHA"
+    "RIVER",
+    "DOGE",
+    "ALPACA"
   ],
   "top_signal": {
-    "symbol": null,
-    "direction": null,
+    "symbol": "RIVERUSDT",
+    "direction": "long",
     "score": null
   },
   "strategy_changes": [],
   "events": [
-    "V4扫描 16:31:24",
+    "V4扫描 16:34:28",
     "BTC: 方向不明",
     "ETH: 方向不明",
     "SOL: 方向不明",
     "BNB: 方向不明",
-    "ALPACA: 当前处于死鱼盘（十字星100%），换场子！",
-    "BNX: 当前处于死鱼盘（十字星100%），换场子！",
-    "ALPHA: 当前处于死鱼盘（十字星100%），换场子！"
+    "DOGE: 方向不明",
+    "ALPACA: 当前处于死鱼盘（十字星100%），换场子！"
   ],
   "strategy_v2": {
     "version": "狂暴动量v4.0",
@@ -43,9 +42,9 @@
       "ETH",
       "SOL",
       "BNB",
-      "ALPACA",
-      "BNX",
-      "ALPHA"
+      "RIVER",
+      "DOGE",
+      "ALPACA"
     ],
     "topN": 7
   }

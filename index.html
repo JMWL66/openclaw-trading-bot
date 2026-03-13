@@ -1820,6 +1820,35 @@
             document.getElementById('liveClock').textContent = formatElapsed(elapsed);
         }
 
+        async function checkInitialBotStatus() {
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            if (!isLocalhost) return;
+
+            try {
+                const res = await fetch('http://127.0.0.1:5000/api/bot/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'running' && !tradingActive) {
+                        tradingActive = true;
+                        tradingStartTime = Date.now(); 
+                        
+                        document.getElementById('liveLabel').textContent = '交易进行中';
+                        document.getElementById('liveChip').classList.add('is-active');
+                        document.getElementById('liveClock').textContent = '00:00:00';
+                        tradingTimerInterval = setInterval(updateElapsedDisplay, 1000);
+                        
+                        // force first data load immediately
+                        if (typeof loadData === 'function') loadData();
+                    }
+                }
+            } catch (e) {
+                console.log('Local backend not reachable on init.');
+            }
+        }
+        
+        // Execute status check on load
+        setTimeout(checkInitialBotStatus, 500);
+
         async function toggleTrading() {
             const chip = document.getElementById('liveChip');
             const label = document.getElementById('liveLabel');
