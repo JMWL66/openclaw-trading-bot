@@ -190,11 +190,11 @@
             top: 0;
             display: inline-flex;
             align-items: center;
-            gap: 12px;
+            gap: 60px;
             min-width: max-content;
             height: 100%;
-            padding: 0 14px;
-            animation: ticker-scroll 24s linear infinite;
+            padding: 0 30px;
+            animation: ticker-scroll 45s linear infinite;
             white-space: nowrap;
         }
 
@@ -208,8 +208,14 @@
             gap: 8px;
             color: var(--text-soft);
             font-size: 0.82rem;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .broadcast-item + .broadcast-item::before {
+            content: '·';
+            margin-right: 60px;
+            color: rgba(51, 215, 255, 0.3);
+            font-size: 1.2rem;
         }
 
         .broadcast-item strong {
