@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-OpenClaw 趋势回调交易策略 v2.0
-永续合约趋势回调交易策略
+OpenClaw 狂暴动量 AI 交易员 Live Edition v4.0
+永续合约动量狙击策略
 
-规则文档：24条策略规则
+规则：双向狙击 + 贪婪模式 + 14min强退 + 30%熔断
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -27,11 +27,13 @@ from urllib.request import Request, urlopen
 
 BASE_DIR = Path("/Users/sonic/.openclaw/workspace/trading-bot")
 BASE_URL = "https://fapi.binance.com"
-USER_AGENT = "openclaw-trend-reversal/2.0"
+USER_AGENT = "openclaw-momentum-sniper/4.0"
 STATUS_FILE = BASE_DIR / "status.json"
 TRADES_FILE = BASE_DIR / "trades.json"
 THINKING_FILE = BASE_DIR / "thinking.json"
 STRATEGY_V2_FILE = BASE_DIR / "strategy_v2.json"
+
+CORE_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
 
 def load_env_file(path: Path) -> None:
@@ -65,31 +67,43 @@ load_env_file(BASE_DIR / ".env")
 def ensure_credentials() -> None:
     if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_SECRET_KEY"):
         return
-    raise RuntimeError("Missing Binance API credentials. Copy .env.example to .env and fill BINANCE_API_KEY / BINANCE_SECRET_KEY.")
+    raise RuntimeError("Missing Binance API credentials.")
 
 
 @dataclass
 class Config:
-    """策略配置"""
-    version: str = "2.0-trend-reversal"
-    top_n: int = 5
+    """V4 策略配置"""
+    version: str = "4.0-momentum-sniper"
+    # 标的
+    core_coins: list[str] = field(default_factory=lambda: list(CORE_COINS))
+    dynamic_pool_size: int = 3
+    top_n: int = 7  # core 4 + dynamic 3
+    # 仓位
     max_concurrent_positions: int = 3
-    position_size_min: float = 0.10
-    position_size_max: float = 0.15
-    fixed_loss_pct: float = 0.015
-    first_target_pct: float = 0.04
-    first_target_close_pct: float = 0.5
-    second_target_pct: float = 0.08
-    leverage_low_vol: int = 10
-    leverage_mid_vol: int = 7
-    leverage_high_vol: int = 5
-    low_vol_threshold: float = 0.015
-    mid_vol_threshold: float = 0.03
-    cooldown_general: int = 180
-    cooldown_after_sl: int = 300
-    limit_order_timeout: int = 10
-    time_exit_minutes: int = 30
-    fixed_coins: list[str] | None = None
+    position_size_pct: float = 0.10
+    # 杠杆
+    default_leverage: int = 10
+    greedy_leverage: int = 20
+    greedy_streak: int = 3
+    # 止盈
+    tp1_pct: float = 0.010        # 1.0% 净利平50%
+    tp1_close_pct: float = 0.5
+    tp2_pct: float = 0.025        # 2.5% 全平
+    # 止损
+    sl_major: float = 0.010       # 主流币 1.0%
+    sl_alt: float = 0.008         # 山寨币 0.8%
+    # 超时
+    time_exit_minutes: int = 14
+    # 冷却
+    cooldown_general: int = 60
+    cooldown_after_sl: int = 180
+    # 市场过滤
+    ma_slope_threshold: float = 0.002   # MA20斜率 0.2%
+    btc_eth_drop_block: float = 0.02    # BTC/ETH 15min跌幅 > 2% 禁止多单
+    doji_threshold: float = 0.50        # 死鱼盘：十字星 > 50%
+    # 熔断
+    drawdown_pct: float = 0.30
+    drawdown_pause_seconds: int = 3600
 
 
 class BinanceClient:
@@ -128,11 +142,9 @@ class BinanceClient:
             return {}
     
     def get_ticker_24h(self) -> list:
-        """获取24小时ticker数据"""
         return self._request("/fapi/v1/ticker/24hr") or []
     
     def get_klines(self, symbol: str, interval: str = "1m", limit: int = 60) -> list:
-        """获取K线数据"""
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         data = self._request("/fapi/v1/klines", params) or []
         return [
@@ -148,15 +160,42 @@ class BinanceClient:
         ]
     
     def get_account(self) -> dict:
-        """获取账户信息"""
         timestamp = int(time.time() * 1000)
         params = {"timestamp": timestamp, "recvWindow": 5000}
         return self._request("/fapi/v2/account", params, signed=True) or {}
     
+    def set_margin_type(self, symbol: str, margin_type: str = "ISOLATED") -> dict:
+        """设置保证金模式为逐仓"""
+        timestamp = int(time.time() * 1000)
+        params = {
+            "symbol": symbol,
+            "marginType": margin_type,
+            "timestamp": timestamp,
+            "recvWindow": 5000,
+        }
+        query = urlencode(params)
+        params["signature"] = self._sign(query)
+        try:
+            return self._request("/fapi/v1/marginType", params, signed=True) or {}
+        except Exception:
+            return {}  # 已经是逐仓模式时会报错，忽略
+    
+    def set_leverage(self, symbol: str, leverage: int) -> dict:
+        """设置杠杆倍数"""
+        timestamp = int(time.time() * 1000)
+        params = {
+            "symbol": symbol,
+            "leverage": leverage,
+            "timestamp": timestamp,
+            "recvWindow": 5000,
+        }
+        query = urlencode(params)
+        params["signature"] = self._sign(query)
+        return self._request("/fapi/v1/leverage", params, signed=True) or {}
+    
     def place_order(self, symbol: str, side: str, order_type: str, 
                     quantity: float = None, price: float = None,
                     reduce_only: bool = False) -> dict:
-        """下单"""
         timestamp = int(time.time() * 1000)
         params = {
             "symbol": symbol,
@@ -217,47 +256,43 @@ class TechnicalIndicators:
         return ((ma_current - ma_past) / ma_past) * 100
     
     @staticmethod
-    def count_ma_crosses(klines: list, ma_p1: int = 5, ma_p2: int = 10) -> int:
-        if len(klines) < max(ma_p1, ma_p2) + 1:
-            return 0
-        closes = [k["close"] for k in klines]
-        crosses = 0
-        prev_diff = None
-        for i in range(max(ma_p1, ma_p2), len(closes)):
-            ma1 = TechnicalIndicators.sma(closes[:i+1], ma_p1)
-            ma2 = TechnicalIndicators.sma(closes[:i+1], ma_p2)
-            diff = ma1 - ma2
-            if prev_diff is not None:
-                if (prev_diff > 0 and diff < 0) or (prev_diff < 0 and diff > 0):
-                    crosses += 1
-            prev_diff = diff
-        return crosses
+    def is_doji(kline: dict, threshold: float = 0.3) -> bool:
+        """判断十字星：实体占整根K线高度的比例很小"""
+        body = abs(kline["close"] - kline["open"])
+        shadow = kline["high"] - kline["low"]
+        if shadow == 0:
+            return True  # 无波动也算死鱼
+        return (body / shadow) < threshold
     
     @staticmethod
-    def hh_hl(klines: list) -> tuple:
-        if len(klines) < 30:
-            return False, False
-        highs = [k["high"] for k in klines[-30:]]
-        lows = [k["low"] for k in klines[-30:]]
-        hh = highs[-1] > highs[-2]
-        hl = lows[-1] > lows[-2]
-        lh = highs[-1] < highs[-2]
-        ll = lows[-1] < lows[-2]
-        return (hh and hl), (lh and ll)
+    def is_engulfing(prev: dict, curr: dict) -> str:
+        """吞没形态检测，返回 'bullish' / 'bearish' / ''"""
+        prev_body = prev["close"] - prev["open"]
+        curr_body = curr["close"] - curr["open"]
+        
+        # 看涨吞没：前阴后阳，当前实体完全包裹前一根
+        if prev_body < 0 and curr_body > 0:
+            if curr["open"] <= prev["close"] and curr["close"] >= prev["open"]:
+                return "bullish"
+        
+        # 看跌吞没：前阳后阴，当前实体完全包裹前一根
+        if prev_body > 0 and curr_body < 0:
+            if curr["open"] >= prev["close"] and curr["close"] <= prev["open"]:
+                return "bearish"
+        
+        return ""
 
 
 class CoinScorer:
-    """币种评分系统"""
+    """V4 币种评分系统 — 评分 = 15min波动率*0.4 + 成交量爆发*0.3 + 5min涨跌幅*0.3"""
     
     def __init__(self, client: BinanceClient):
         self.client = client
     
     def get_top_coins(self, top_n: int = 20) -> list:
-        """获取现货成交额前N的币种"""
+        """获取成交额前N的USDT合约币种"""
         import urllib.request
-        import json
         
-        # 稳定币列表（过滤掉）
         stable_coins = ['USDCUSDT', 'USDTUSDT', 'FDUSDUSDT', 'USD1USDT', 'USDDUSDT', 'TUSDUSDT', 'BUSDUSDT']
         
         url = "https://api.binance.com/api/v3/ticker/24hr"
@@ -270,315 +305,211 @@ class CoinScorer:
             print(f"获取现货数据失败: {e}")
             tickers = self.client.get_ticker_24h()
         
-        # 过滤USDT交易对，排除稳定币
         usdt_pairs = [t for t in tickers if t.get("symbol", "").endswith("USDT") 
                       and t.get("symbol", "") not in stable_coins]
-        # 按现货成交额排序
         sorted_tickers = sorted(usdt_pairs, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
         return [t["symbol"] for t in sorted_tickers[:top_n]]
     
-    def get_top_scored(self, universe: list, top_n: int = 10) -> list:
-        """获取评分最高的币种（使用百分位排名）"""
-        btc_klines = self.client.get_klines("BTCUSDT", "1m", 60)
-        eth_klines = self.client.get_klines("ETHUSDT", "1m", 60)
+    def score_coin(self, symbol: str) -> float:
+        """V4评分公式: 15min波动率*0.4 + 成交量爆发*0.3 + 5min涨跌幅*0.3"""
+        klines = self.client.get_klines(symbol, "1m", 20)
+        if not klines or len(klines) < 15:
+            return 0
         
-        btc_chg = (btc_klines[-1]["close"] - btc_klines[-30]["close"]) / btc_klines[-30]["close"] * 100 if len(btc_klines) >= 30 else 0
-        eth_chg = (eth_klines[-1]["close"] - eth_klines[-30]["close"]) / eth_klines[-30]["close"] * 100 if len(eth_klines) >= 30 else 0
+        # 15min波动率 (ATR / price)
+        vol_15m = TechnicalIndicators.volatility(klines[-15:], 15)
         
-        # 先获取所有币种的原始指标值
-        coin_metrics = []
-        for symbol in universe:
-            metrics = self._calc_metrics(symbol, btc_chg, eth_chg)
-            if metrics:
-                coin_metrics.append((symbol, metrics))
+        # 成交量爆发：最近5根 vs 前10根平均量
+        volumes = [k["volume"] for k in klines]
+        if len(volumes) >= 15:
+            vol_recent = sum(volumes[-5:]) / 5
+            vol_prev = sum(volumes[-15:-5]) / 10
+            vol_burst = (vol_recent / vol_prev - 1) * 100 if vol_prev > 0 else 0
+        else:
+            vol_burst = 0
         
-        if not coin_metrics:
-            return []
+        # 5min涨跌幅（绝对值）
+        closes = [k["close"] for k in klines]
+        if len(closes) >= 5 and closes[-5] > 0:
+            change_5m = abs((closes[-1] - closes[-5]) / closes[-5]) * 100
+        else:
+            change_5m = 0
         
-        # 提取各项指标
-        price_changes = [m['price_change'] for _, m in coin_metrics]
-        vol_growths = [m['vol_growth'] for _, m in coin_metrics]
-        volatilities = [m['volatility'] for _, m in coin_metrics]
-        rel_changes = [m['rel_change'] for _, m in coin_metrics]
+        return vol_15m * 0.4 + vol_burst * 0.3 + change_5m * 0.3
+    
+    def get_dynamic_pool(self, exclude: list[str], top_n: int = 3) -> list:
+        """从成交额Top10（排除核心池）中取评分最高的前N"""
+        all_coins = self.get_top_coins(20)
+        candidates = [c for c in all_coins if c not in exclude][:10]
         
-        # 计算百分位排名
-        def percentile_rank(value: float, values: list) -> float:
-            if not values or len(values) < 2:
-                return 50
-            sorted_vals = sorted(values)
-            try:
-                rank = sorted_vals.index(value) / (len(sorted_vals) - 1) * 100
-            except:
-                rank = 50
-            return rank
-        
-        # 计算每个币种的综合评分
         scored = []
-        for symbol, metrics in coin_metrics:
-            p_score = percentile_rank(metrics['price_change'], price_changes)
-            v_score = percentile_rank(metrics['vol_growth'], vol_growths)
-            vola_score = percentile_rank(metrics['volatility'], volatilities)
-            r_score = percentile_rank(metrics['rel_change'], rel_changes)
-            
-            # 权重: 涨跌幅30%, 成交量增长25%, 波动率25%, 相对BTC/ETH 20%
-            total = p_score * 0.30 + v_score * 0.25 + vola_score * 0.25 + r_score * 0.20
-            scored.append((symbol, total))
+        for symbol in candidates:
+            score = self.score_coin(symbol)
+            scored.append((symbol, score))
         
-        # 排序返回top_n
         scored.sort(key=lambda x: x[1], reverse=True)
         return [s[0] for s in scored[:top_n]]
-    
-    def _calc_metrics(self, symbol: str, btc_change: float, eth_change: float) -> dict:
-        """计算单个币种的原始指标"""
-        klines_30m = self.client.get_klines(symbol, "1m", 60)
-        if not klines_30m or len(klines_30m) < 30:
-            return None
-        
-        closes = [k["close"] for k in klines_30m]
-        volumes = [k["volume"] for k in klines_30m]
-        
-        # 1. 30分钟涨跌幅（绝对值）
-        change_30m = abs((closes[-1] - closes[-30]) / closes[-30] * 100)
-        
-        # 2. 成交量增长率
-        vol_growth = 0
-        if len(volumes) >= 60:
-            vol_c = sum(volumes[-30:]) / 30
-            vol_p = sum(volumes[-60:-30]) / 30
-            vol_growth = (vol_c - vol_p) / vol_p * 100 if vol_p > 0 else 0
-        
-        # 3. 波动率
-        volatility = TechnicalIndicators.volatility(klines_30m, 30)
-        
-        # 4. 相对BTC/ETH涨跌幅差值
-        rel_change = (change_30m - btc_change + change_30m - eth_change) / 2
-        
-        return {
-            'price_change': change_30m,
-            'vol_growth': vol_growth,
-            'volatility': volatility,
-            'rel_change': rel_change
-        }
 
 
-class TrendStrategy:
-    """趋势回调策略"""
+class MomentumStrategy:
+    """V4 狂暴动量策略"""
     
     def __init__(self, client: BinanceClient, config: Config):
         self.client = client
         self.config = config
     
-    def check_market_filter(self) -> tuple:
+    def check_market_filter(self) -> tuple[bool, str, str]:
+        """
+        战区环境检测
+        返回: (ok, reason, zone) zone='long'/'short'/'blocked'
+        """
+        # BTC/ETH 15min暴跌检测
         for symbol in ["BTCUSDT", "ETHUSDT"]:
             klines = self.client.get_klines(symbol, "1m", 15)
             if len(klines) < 15:
                 continue
             chg = (klines[-1]["close"] - klines[0]["close"]) / klines[0]["close"]
-            if chg <= -0.03:
-                return False, f"{symbol} 15m跌{chg*100:.1f}%"
+            if chg <= -self.config.btc_eth_drop_block:
+                return False, f"{symbol} 15m跌{chg*100:.1f}%，禁止多单", "blocked"
+        
+        # 用BTC判定战区方向：MA5 > MA10 > MA20 为多头区
+        btc_klines = self.client.get_klines("BTCUSDT", "1m", 30)
+        if len(btc_klines) < 20:
+            return True, "K线不足，默认通过", "long"
+        
+        closes = [k["close"] for k in btc_klines]
+        ma5 = TechnicalIndicators.sma(closes, 5)
+        ma10 = TechnicalIndicators.sma(closes, 10)
+        ma20 = TechnicalIndicators.sma(closes, 20)
+        
+        # MA20斜率
+        ma20_prev = TechnicalIndicators.sma(closes[:-5], 20) if len(closes) > 5 else ma20
+        slope = TechnicalIndicators.ma_slope(ma20, ma20_prev)
+        
+        if ma5 > ma10 > ma20 and slope > self.config.ma_slope_threshold * 100:
+            return True, "多头战区", "long"
+        elif ma5 < ma10 < ma20 and slope < -self.config.ma_slope_threshold * 100:
+            return True, "空头战区", "short"
+        
+        # 方向不明确但不阻止交易
+        return True, "震荡区间", "neutral"
+    
+    def check_dead_fish(self, symbol: str) -> tuple[bool, str]:
+        """死鱼盘检测：15min内十字星K线 > 50%"""
+        klines = self.client.get_klines(symbol, "1m", 15)
+        if len(klines) < 15:
+            return True, "K线不足"
+        
+        doji_count = sum(1 for k in klines if TechnicalIndicators.is_doji(k))
+        ratio = doji_count / len(klines)
+        
+        if ratio > self.config.doji_threshold:
+            return False, f"当前处于死鱼盘（十字星{ratio*100:.0f}%），换场子！"
         return True, "OK"
     
-    def check_trend_filter(self, symbol: str) -> tuple:
-        klines = self.client.get_klines(symbol, "1m", 60)
-        if len(klines) < 35:  # 需要至少35根K线来计算当前MA30和5根K线前的MA30
-            return False, "K线不足"
-        
-        closes = [k["close"] for k in klines]
-        
-        # MA30斜率 = (当前MA30 - 5根K线前的MA30) / 5根K线前的MA30 × 100%
-        ma30_c = TechnicalIndicators.sma(closes, 30)
-        # 5根K线前的MA30：用closes[:-5]计算
-        ma30_5_ago = TechnicalIndicators.sma(closes[:-5], 30) if len(closes) > 5 else ma30_c
-        ma30_slope = abs(TechnicalIndicators.ma_slope(ma30_c, ma30_5_ago))
-        
-        if ma30_slope < 0.15:
-            return False, f"MA30斜率{ma30_slope:.3f}%<0.15%"
-        
-        vol_15m = TechnicalIndicators.volatility(klines, 15)
-        if vol_15m < 1.0:
-            return False, f"波动率{vol_15m:.2f}%<1%"
-        
-        crosses = TechnicalIndicators.count_ma_crosses(klines, 5, 10)
-        if crosses >= 3:
-            return False, f"MA交叉{crosses}次>=3"
-        
-        return True, "OK"
-    
-    def identify_trend(self, symbol: str) -> str:
-        klines = self.client.get_klines(symbol, "1m", 60)
-        if len(klines) < 60:
+    def identify_direction(self, symbol: str) -> str:
+        """通过MA排列判断方向"""
+        klines = self.client.get_klines(symbol, "1m", 25)
+        if len(klines) < 20:
             return "unknown"
         
         closes = [k["close"] for k in klines]
-        ma5, ma10, ma30, ma60 = [TechnicalIndicators.sma(closes, p) for p in [5, 10, 30, 60]]
+        ma5 = TechnicalIndicators.sma(closes, 5)
+        ma10 = TechnicalIndicators.sma(closes, 10)
+        ma20 = TechnicalIndicators.sma(closes, 20)
         
-        is_up = ma5 > ma10 > ma30 > ma60
-        is_down = ma5 < ma10 < ma30 < ma60
+        ma20_prev = TechnicalIndicators.sma(closes[:-5], 20) if len(closes) > 5 else ma20
+        slope = TechnicalIndicators.ma_slope(ma20, ma20_prev)
         
-        if not (is_up or is_down):
-            return "unknown"
-        
-        hh_hl, lh_ll = TechnicalIndicators.hh_hl(klines)
-        
-        if is_up and hh_hl:
-            return "uptrend"
-        elif is_down and lh_ll:
-            return "downtrend"
-        
+        if ma5 > ma10 > ma20 and slope > self.config.ma_slope_threshold * 100:
+            return "long"
+        elif ma5 < ma10 < ma20 and slope < -self.config.ma_slope_threshold * 100:
+            return "short"
         return "unknown"
     
-    def check_long_entry(self, symbol: str) -> tuple:
-        klines = self.client.get_klines(symbol, "1m", 30)
-        if len(klines) < 15:
-            return False, []
-        
-        closes = [k["close"] for k in klines]
-        volumes = [k["volume"] for k in klines]
-        price = closes[-1]
-        
-        ma5, ma10, ma30 = [TechnicalIndicators.sma(closes, p) for p in [5, 10, 30]]
-        
-        cond = []
-        
-        # 条件1: 价格回调至MA附近
-        for ma in [ma5, ma10, ma30]:
-            d = abs(price - ma) / ma * 100
-            if 0.6 <= d <= 1.2:
-                cond.append("near_ma")
-                break
-        
-        # 条件2: 成交量递减
-        if len(volumes) >= 3 and volumes[-1] < volumes[-2] < volumes[-3]:
-            cond.append("vol_down")
-        
-        # 条件3: 阳线站上MA5
-        if klines[-1]["close"] > ma5 and klines[-1]["close"] > klines[-1]["open"]:
-            cond.append("bullish")
-        
-        # 条件4: 未跌破15分钟低点
-        lows = [k["low"] for k in klines[-15:]]
-        if price > min(lows):
-            cond.append("above_low")
-        
-        return len(cond) >= 3, cond
-    
-    def check_short_entry(self, symbol: str) -> tuple:
-        klines = self.client.get_klines(symbol, "1m", 30)
-        if len(klines) < 15:
-            return False, []
-        
-        closes = [k["close"] for k in klines]
-        volumes = [k["volume"] for k in klines]
-        price = closes[-1]
-        
-        ma5, ma10, ma30 = [TechnicalIndicators.sma(closes, p) for p in [5, 10, 30]]
-        
-        cond = []
-        
-        for ma in [ma5, ma10, ma30]:
-            d = abs(price - ma) / ma * 100
-            if 0.6 <= d <= 1.2:
-                cond.append("near_ma")
-                break
-        
-        if len(volumes) >= 3 and volumes[-1] < volumes[-2] < volumes[-3]:
-            cond.append("vol_down")
-        
-        if klines[-1]["close"] < ma5 and klines[-1]["close"] < klines[-1]["open"]:
-            cond.append("bearish")
-        
-        highs = [k["high"] for k in klines[-15:]]
-        if price < max(highs):
-            cond.append("below_high")
-        
-        return len(cond) >= 3, cond
-    
-    def get_leverage(self, symbol: str) -> int:
-        klines = self.client.get_klines(symbol, "1m", 60)
-        if not klines:
-            return 5
-        vol = TechnicalIndicators.volatility(klines, 60)
-        
-        if vol < self.config.low_vol_threshold:
-            return self.config.leverage_low_vol
-        elif vol < self.config.mid_vol_threshold:
-            return self.config.leverage_mid_vol
-        return self.config.leverage_high_vol
-    
-    def calc_sl(self, direction: str, entry: float) -> float:
-        fees = 0.0002 + 0.0005 + 0.001
-        dist = self.config.fixed_loss_pct + fees
-        if direction == "long":
-            return entry * (1 - dist)
-        return entry * (1 + dist)
-    
-    def calc_tp(self, direction: str, entry: float) -> tuple:
-        fees = 0.0002 + 0.0002
-        tp1 = entry * (1 + self.config.first_target_pct - fees)
-        tp2 = entry * (1 + self.config.second_target_pct - fees)
-        if direction == "short":
-            tp1 = entry * (1 - self.config.first_target_pct + fees)
-            tp2 = entry * (1 - self.config.second_target_pct + fees)
-        return tp1, tp2
-    
-    def check_trend_break(self, symbol: str, direction: str) -> bool:
-        klines = self.client.get_klines(symbol, "1m", 15)
+    def check_entry(self, symbol: str, direction: str) -> tuple[bool, list[str]]:
+        """
+        双向狙击逻辑：3选2
+        A: 价格回调/反弹至MA5/MA10附近 (< 0.8%)
+        B: 1min出现吞没实体
+        C: 缩量后放量突破MA5
+        """
+        klines = self.client.get_klines(symbol, "1m", 20)
         if len(klines) < 10:
-            return False
+            return False, []
+        
         closes = [k["close"] for k in klines]
-        ma5, ma10 = [TechnicalIndicators.sma(closes, p) for p in [5, 10]]
-        if direction == "long" and ma5 < ma10:
-            return True
-        if direction == "short" and ma5 > ma10:
-            return True
-        return False
+        volumes = [k["volume"] for k in klines]
+        price = closes[-1]
+        
+        ma5 = TechnicalIndicators.sma(closes, 5)
+        ma10 = TechnicalIndicators.sma(closes, 10)
+        
+        cond = []
+        
+        # 条件A: 回归 — 价格距MA5或MA10 < 0.8%
+        for ma, name in [(ma5, "MA5"), (ma10, "MA10")]:
+            if ma > 0:
+                dist = abs(price - ma) / ma * 100
+                if dist < 0.8:
+                    cond.append(f"回归{name}")
+                    break
+        
+        # 条件B: 吞没形态
+        if len(klines) >= 2:
+            engulf = TechnicalIndicators.is_engulfing(klines[-2], klines[-1])
+            if direction == "long" and engulf == "bullish":
+                cond.append("看涨吞没")
+            elif direction == "short" and engulf == "bearish":
+                cond.append("看跌吞没")
+        
+        # 条件C: 缩量整理后放量突破MA5
+        if len(volumes) >= 5:
+            # 前3根缩量（递减或低于均量）
+            avg_vol = sum(volumes[-8:-3]) / 5 if len(volumes) >= 8 else sum(volumes) / len(volumes)
+            recent_shrink = all(v < avg_vol * 0.8 for v in volumes[-4:-1])
+            current_burst = volumes[-1] > avg_vol * 1.2
+            
+            if recent_shrink and current_burst:
+                if direction == "long" and price > ma5:
+                    cond.append("放量突破")
+                elif direction == "short" and price < ma5:
+                    cond.append("放量跌破")
+        
+        return len(cond) >= 2, cond
+    
+    def get_sl_pct(self, symbol: str) -> float:
+        """根据币种类型返回止损比例"""
+        if symbol in CORE_COINS:
+            return self.config.sl_major
+        return self.config.sl_alt
+    
+    def calc_sl(self, direction: str, entry: float, sl_pct: float) -> float:
+        """计算止损价"""
+        if direction == "long":
+            return entry * (1 - sl_pct)
+        return entry * (1 + sl_pct)
 
 
 class TradingBot:
-    """交易机器人"""
+    """V4 交易机器人"""
     
     def __init__(self, api_key: str = "", secret_key: str = ""):
         self.client = BinanceClient(api_key, secret_key)
         self.config = Config()
-        self.load_strategy_config()
         self.scorer = CoinScorer(self.client)
-        self.strategy = TrendStrategy(self.client, self.config)
+        self.strategy = MomentumStrategy(self.client, self.config)
         
         self.universe = []
         self.trading_coins = []
         self.positions = {}
         self.last_trade = {}
         self.consecutive_losses = 0
+        self.consecutive_wins = 0
         self.pause_until = 0
         self.highest_balance = 0
         self.last_universe_update = 0
         self.last_events = []
-
-    def load_strategy_config(self) -> None:
-        strategy_v2 = read_json(STRATEGY_V2_FILE, {})
-        if not strategy_v2:
-            return
-
-        self.config.version = strategy_v2.get("version", self.config.version)
-        self.config.top_n = int(strategy_v2.get("topN", self.config.top_n))
-        self.config.max_concurrent_positions = int(strategy_v2.get("position", {}).get("maxConcurrentPositions", self.config.max_concurrent_positions))
-        self.config.position_size_min = float(strategy_v2.get("position", {}).get("sizeMinFraction", self.config.position_size_min))
-        self.config.position_size_max = float(strategy_v2.get("position", {}).get("sizeMaxFraction", self.config.position_size_max))
-        self.config.fixed_loss_pct = float(strategy_v2.get("stopLoss", {}).get("fixedLossPct", self.config.fixed_loss_pct))
-        self.config.first_target_pct = float(strategy_v2.get("takeProfit", {}).get("firstTargetPct", self.config.first_target_pct))
-        self.config.first_target_close_pct = float(strategy_v2.get("takeProfit", {}).get("firstTargetClosePct", self.config.first_target_close_pct))
-        self.config.second_target_pct = float(strategy_v2.get("takeProfit", {}).get("secondTargetPct", self.config.second_target_pct))
-        self.config.leverage_low_vol = int(strategy_v2.get("position", {}).get("leverageVolatilityLow", {}).get("leverage", self.config.leverage_low_vol))
-        self.config.leverage_mid_vol = int(strategy_v2.get("position", {}).get("leverageVolatilityMid", {}).get("leverage", self.config.leverage_mid_vol))
-        self.config.leverage_high_vol = int(strategy_v2.get("position", {}).get("leverageVolatilityHigh", {}).get("leverage", self.config.leverage_high_vol))
-        self.config.low_vol_threshold = float(strategy_v2.get("position", {}).get("leverageVolatilityLow", {}).get("max", self.config.low_vol_threshold))
-        self.config.mid_vol_threshold = float(strategy_v2.get("position", {}).get("leverageVolatilityMid", {}).get("max", self.config.mid_vol_threshold))
-        self.config.cooldown_general = int(strategy_v2.get("cooldown", {}).get("generalMinutes", self.config.cooldown_general / 60) * 60)
-        self.config.cooldown_after_sl = int(strategy_v2.get("cooldown", {}).get("symbolAfterSLMinutes", self.config.cooldown_after_sl / 60) * 60)
-        self.config.limit_order_timeout = int(strategy_v2.get("orders", {}).get("limitOrderTimeoutSeconds", self.config.limit_order_timeout))
-        self.config.time_exit_minutes = int(strategy_v2.get("timeExit", {}).get("maxHoldMinutes", self.config.time_exit_minutes))
-        fixed = strategy_v2.get("coins", [])
-        self.config.fixed_coins = [f"{str(coin).upper().replace('USDT', '')}USDT" for coin in fixed] if fixed else None
 
     def now_str(self) -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -586,110 +517,100 @@ class TradingBot:
     # ── 直播解说语料库 ──────────────────────────────────────
     COMMENTARY = {
         "scan_start": [
-            "🔄 新一轮扫描启动！让我看看谁在这个时间点还敢活跃...",
+            "🔄 【狂暴模式】新一轮猎杀启动！",
             "🔄 雷达已开启，正在全市场搜索猎物...",
-            "🔄 又到了激动人心的扫描时间！各位币种请就位...",
+            "🔄 动量雷达扫描中，谁在这个时间点最骚动？",
             "🔄 开始巡逻，看看有没有币种在偷偷搞事情...",
             "🔄 AI之眼已觉醒，扫描全场中...",
-            "🔄 各位观众，新一轮市场体检开始了！",
-            "🔄 启动第N次扫描，这次一定有好戏看！",
+            "🔄 V4引擎转速拉满！全市场扫描中...",
             "🔄 开始搜索！如果市场是海洋，我就是那条最敏锐的鲨鱼 🦈",
         ],
         "market_filter_fail": [
-            "⛔ 大盘崩了？{reason}... 先撤，留得青山在！",
-            "⛔ {reason}，看这架势，我决定先空仓看戏 🍿",
-            "⛔ 卧槽！{reason}，这种行情开仓等于送钱啊兄弟们",
-            "⛔ {reason}，大盘太拉垮了，我先去泡杯咖啡 ☕",
-            "⛔ {reason}，AI也怕被套，咱不当英雄，苟着！",
-            "⛔ {reason}，行情在下饺子呢！我选择坐在岸边钓鱼 🎣",
-            "⛔ {reason}，市场先生今天心情不好，等他冷静了再说",
+            "⛔ {reason}... 大盘太拉跨了，先撤！",
+            "⛔ {reason}，看这架势，先空仓看戏 🍿",
+            "⛔ {reason}，这种行情开仓等于送钱啊兄弟们",
+            "⛔ {reason}，AI也怕被套，苟着！",
+            "⛔ {reason}，市场先生今天心情不好，等他冷静再说",
+        ],
+        "dead_fish": [
+            "🐟 {coin}：{reason}",
+            "🐟 {coin} 一动不动，这是在装死吗？换场子！",
+            "🐟 {coin} 完全没有脉搏，跳过这条死鱼！",
         ],
         "trend_skip": [
-            "🔍 扫了一眼 {coin}，走势乱成一锅粥，跳过！",
-            "🔍 {coin} 在原地画圈圈，没啥搞头，下一个！",
-            "🔍 分析了 {coin}：{reason}，先不碰它",
-            "🔍 {coin} 的K线画得跟心电图似的，暂时不敢动",
-            "🔍 {coin} 趋势不明朗，机智如我选择观望",
-            "🔍 {coin}？看了一眼就跑了...",
+            "🔍 扫了一眼 {coin}，方向不明，跳过！",
+            "🔍 {coin} 在原地画圈圈，下一个！",
+            "🔍 {coin} 趋势不明朗，选择观望",
         ],
         "long_signal": [
-            "📈 发现猎物！{coin} 出现做多信号：{cond}，准备冲了！",
-            "📈 {coin} 多头信号爆了：{cond}！老司机要发车了 🚀",
-            "📈 兄弟们看好了！{coin} 满足 {cond}，教科书级别的多单机会！",
-            "📈 {coin} 回调到位，{cond} 条件达标，AI决定抄底！",
-            "📈 {coin} 亮绿灯了！{cond}，资金已经在门口排队了",
-            "📈 注意！{coin} 出现黄金做多点位：{cond}，准备开干 💪",
+            "📈【狙击时刻】检测到 {coin} 动量爆发：{cond}，10倍杠杆出击！",
+            "📈 发现猎物！{coin} 多头信号：{cond}，准备冲了！🚀",
+            "📈 {coin} 满足 {cond}，教科书级别的多单机会！",
+            "📈 注意！{coin} 出现黄金做多点位：{cond} 💪",
         ],
         "short_signal": [
-            "📉 {coin} 空头信号来了：{cond}！准备做空收割",
-            "📉 {coin} 涨不动了，{cond}，该是空军出击的时候！",
-            "📉 发现 {coin} 弱势信号：{cond}，准备反手做空 🐻",
-            "📉 {coin} 的多头快没油了，{cond}，空军集合！",
-            "📉 {coin} 出现经典做空形态：{cond}，别说我没提醒各位",
+            "📉【狙击时刻】检测到 {coin} 空头动量：{cond}，精准做空！",
+            "📉 {coin} 空头信号来了：{cond}！空军出击！",
+            "📉 {coin} 弱势信号：{cond}，反手做空 🐻",
         ],
         "open_long": [
-            "🎯 下单！{coin} 做多开仓 @ {price}，让利润飞一会儿！",
-            "🎯 冲了！{coin} 多单已挂 @ {price}，各位系好安全带 🎢",
-            "🎯 AI果断出手！{coin} 做多 @ {price}，信仰充值完毕",
-            "🎯 {coin} 做多入场 @ {price}，这波我很有信心！",
+            "🎯【出击】{coin} 做多 @ {price}，{lev}x杠杆！让利润飞！",
+            "🎯 冲了！{coin} 多单 @ {price} {lev}x，系好安全带 🎢",
+            "🎯 {coin} 做多入场 @ {price} {lev}x，信心满满！",
         ],
         "open_short": [
-            "🎯 下单！{coin} 做空开仓 @ {price}，等着它掉下来",
-            "🎯 空军出击！{coin} 空单已挂 @ {price} 🪂",
-            "🎯 反手做空 {coin} @ {price}，顺势而为才是王道",
-            "🎯 {coin} 空单入场 @ {price}，让空头的子弹飞一会儿",
+            "🎯【出击】{coin} 做空 @ {price}，{lev}x杠杆！等着它掉！",
+            "🎯 空军出击！{coin} 空单 @ {price} {lev}x 🪂",
+            "🎯 {coin} 空单入场 @ {price} {lev}x，顺势而为！",
         ],
         "close_profit": [
-            "🧾 落袋为安！{coin} 止盈平仓，又是美好的一笔 💰",
-            "🧾 {coin} 到达目标，漂亮地收割了这一波！利润入账 🤑",
-            "🧾 {coin} 平仓获利！谢谢市场先生的红包",
+            "🧾 落袋为安！{coin} 止盈平仓 💰",
+            "🧾 {coin} 到达目标，漂亮收割！🤑",
+            "🧾 {coin} 利润入账！谢谢市场先生的红包",
         ],
         "close_loss": [
-            "🧾 {coin} 触发止损平仓，小亏一笔，下次再战！",
-            "🧾 {coin} 认栽了，止损出局。留得青山在，不怕没柴烧 🌲",
-            "🧾 {coin} 方向做反了，果断止损。亏小钱保大命！",
-        ],
-        "close_trend_break": [
-            "🧾 {coin} 趋势突然反转！赶紧跑路，保住利润 🏃",
-            "🧾 {coin} 的趋势开始变脸了，机智撤退！",
-            "🧾 {coin} MA交叉反转，不恋战，直接跑！",
+            "🧾 {coin} 触发止损，小亏一笔，下次再战！",
+            "🧾 {coin} 认栽了，止损出局。留得青山在 🌲",
+            "🧾 {coin} 方向做反，果断止损。亏小钱保大命！",
         ],
         "close_timeout": [
-            "🧾 {coin} 磨了半天不动，超时平仓换下一个目标！",
-            "🧾 {coin} 在那儿原地踏步30分钟了，换车找机会！",
+            "🧾 14分钟博弈结束，{coin} 太磨叽，撤单换猎物！",
+            "🧾 {coin} 磨了14分钟不动，超时退出！",
             "🧾 {coin} 超时了，AI不喜欢等太久，下一个！",
+        ],
+        "close_tp1": [
+            "🧾 {coin} 1%止盈，平一半！止损移至保本，安心坐等 ✌️",
+            "🧾 {coin} 触发第一目标，减仓50%，锁利继续！",
         ],
         "no_signal": [
             "😴 这一轮没找到好机会，继续蹲守...",
-            "😴 市场太安静了，AI先打个盹，一分钟后再战...",
-            "😴 暂时没信号，各位观众别急，好戏还在后头...",
-            "😴 全场静默...这种时候最忌讳冲动交易，继续等！",
-            "😴 什么信号都没有？行吧，佛系等待中...",
-            "😴 当前行情：一潭死水。AI选择冥想等待下一波 🧘",
-            "😴 扫了一圈，啥也没有...这就是交易的日常啊朋友们",
-            "😴 没有机会就是最好的风控！咱不强行开单",
+            "😴 市场太安静了，AI先打个盹...",
+            "😴 暂时没信号，好戏还在后头...",
+            "😴 全场静默...不冲动，继续等！",
+            "😴 没有机会就是最好的风控！",
+            "😴 扫了一圈啥也没有，交易的日常啊朋友们",
         ],
         "universe_update": [
-            "📡 交易池刷新！本轮选手：{coins}，各就位！",
-            "📡 AI精挑细选出了今天的战场：{coins}",
-            "📡 新一轮选拔结束，能上场的就这几位：{coins}",
-            "📡 交易池更新完毕，让我们欢迎今天的参赛选手：{coins} 🏟️",
-            "📡 从全市场几百个币里，我只看上了这些：{coins}",
+            "📡 V4猎场刷新！核心：{core}，动态：{dynamic}",
+            "📡 新一轮选拔完毕！参赛选手：{coins}",
+            "📡 从全市场里挑出了这些：{coins}",
+        ],
+        "greedy_on": [
+            "🔥【狂暴模式开启】三连胜手感火热，20倍重仓出击！",
+            "🔥 三连赢！贪婪模式激活！杠杆拉到20x！",
+            "🔥 连续止盈3笔！AI决定加大火力！20x！",
+        ],
+        "greedy_off": [
+            "💤 贪婪模式关闭，回到正常10x杠杆",
         ],
         "paused_drawdown": [
-            "🚨 回撤太大了，强制休息！总得给自己留条命啊",
-            "🚨 紧急熔断！亏太多了，AI决定闭关修炼24小时",
-            "🚨 达到最大回撤，系统自动暂停。有时候不交易就是最好的交易",
-        ],
-        "paused_loss_streak": [
-            "⏸️ 连亏{n}把了，先冷静一下再说...",
-            "⏸️ 手感不好连亏{n}次，让AI缓缓再来",
-            "⏸️ 连败{n}场，为了避免上头，强制暂停中 🧊",
+            "🚨【系统宕机】别看了，AI也得去天台吹吹风，1小时后再回来复仇！",
+            "🚨 当日回撤30%，紧急熔断！1小时后复活！",
+            "🚨 亏太多了！AI决定闭关修炼1小时后再战",
         ],
     }
 
     def pick_comment(self, category: str, **kwargs) -> str:
-        """从语料库中随机选一条幽默解说"""
         pool = self.COMMENTARY.get(category, [])
         if not pool:
             return ""
@@ -738,10 +659,8 @@ class TradingBot:
         balance = self.get_balance()
         open_positions, total_unrealized = self.build_open_positions()
 
-        strategy_v2 = read_json(STRATEGY_V2_FILE, {})
-        take_profit = strategy_v2.get("takeProfit", {})
-        stop_loss = strategy_v2.get("stopLoss", {})
-        position = strategy_v2.get("position", {})
+        is_greedy = self.consecutive_wins >= self.config.greedy_streak
+        lev_label = f"{'🔥20x狂暴' if is_greedy else '10x标准'}"
 
         status.update({
             "last_run": self.now_str(),
@@ -750,37 +669,38 @@ class TradingBot:
             "unrealized_pnl": round(float(total_unrealized), 4),
             "positions": len(open_positions),
             "open_positions": open_positions,
-            "mode": "strategy-v2",
+            "mode": "strategy-v4",
             "watchlist": [symbol.replace("USDT", "") for symbol in self.trading_coins],
             "top_signal": top_signal or {"symbol": None, "direction": None, "score": None},
-            "events": (events or self.last_events or ["v2 running"])[-8:],
+            "events": (events or self.last_events or ["v4 running"])[-8:],
             "strategy_v2": {
-                "version": "趋势回调v2.0",
-                "takeProfit": f"第一目标+{take_profit.get('firstTargetPct', 4) * 100:.1f}%卖50%，第二目标+{take_profit.get('secondTargetPct', 8) * 100:.1f}%全卖",
-                "stopLoss": f"固定{stop_loss.get('fixedLossPct', 1.5) * 100:.1f}% + 结构保护",
-                "leverage": f"低波动{position.get('leverageVolatilityLow', {}).get('leverage', 10)}x / 中波动{position.get('leverageVolatilityMid', {}).get('leverage', 7)}x / 高波动{position.get('leverageVolatilityHigh', {}).get('leverage', 5)}x",
-                "positionSize": f"单笔{position.get('sizeMinFraction', 0.10) * 100:.0f}%-{position.get('sizeMaxFraction', 0.15) * 100:.0f}%仓位，最多{position.get('maxConcurrentPositions', 3)}持仓",
-                "entryLogic": "MA趋势判断 + 4选3回调开仓",
+                "version": "狂暴动量v4.0",
+                "takeProfit": f"+1.0%平50%移保本 / +2.5%全平",
+                "stopLoss": f"主流1.0% / 山寨0.8%",
+                "leverage": lev_label,
+                "positionSize": f"10%仓位，最多{self.config.max_concurrent_positions}持仓",
+                "entryLogic": "3选2狙击：回归MA / 吞没形态 / 放量突破",
                 "coins": [symbol.replace("USDT", "") for symbol in self.trading_coins],
-                "topN": strategy_v2.get("topN", self.config.top_n),
+                "topN": self.config.top_n,
             }
         })
         write_json(STATUS_FILE, status)
     
     def update_universe(self):
         now = time.time()
-        if not self.universe or now - self.last_universe_update > 600:
-            print("更新币种列表...")
-            if self.config.fixed_coins:
-                self.universe = self.config.fixed_coins[:]
-                self.trading_coins = self.config.fixed_coins[:self.config.top_n]
-            else:
-                self.universe = self.scorer.get_top_coins(30)
-                self.trading_coins = self.scorer.get_top_scored(self.universe, self.config.top_n)
+        if not self.universe or now - self.last_universe_update > 60:  # 每分钟刷新
+            print("更新V4币种列表...")
+            core = [c for c in self.config.core_coins]
+            dynamic = self.scorer.get_dynamic_pool(core, self.config.dynamic_pool_size)
+            self.universe = core + dynamic
+            self.trading_coins = self.universe[:self.config.top_n]
             self.last_universe_update = now
-            print(f"交易币种: {self.trading_coins}")
-            coins_str = ' / '.join(symbol.replace('USDT', '') for symbol in self.trading_coins) if self.trading_coins else '暂无'
-            self.add_thought(self.pick_comment("universe_update", coins=coins_str))
+            
+            core_str = ' / '.join(c.replace('USDT', '') for c in core)
+            dynamic_str = ' / '.join(c.replace('USDT', '') for c in dynamic) if dynamic else '暂无'
+            coins_str = ' / '.join(c.replace('USDT', '') for c in self.trading_coins)
+            self.add_thought(self.pick_comment("universe_update", core=core_str, dynamic=dynamic_str, coins=coins_str))
+            print(f"V4交易池: {self.trading_coins}")
     
     def get_balance(self) -> float:
         account = self.client.get_account()
@@ -792,25 +712,32 @@ class TradingBot:
     def is_paused(self) -> bool:
         now = time.time()
         if now < self.pause_until:
-            print(f"暂停中，剩余{int(self.pause_until-now)}秒")
+            remaining = int(self.pause_until - now)
+            print(f"熔断暂停中，剩余{remaining}秒")
             return True
         
         if self.highest_balance > 0:
             bal = self.get_balance()
             dd = (self.highest_balance - bal) / self.highest_balance
-            if dd >= 0.40:
-                print("回撤40%，停机")
+            if dd >= self.config.drawdown_pct:
+                print(f"回撤{dd*100:.1f}%，触发熔断！暂停1小时")
                 self.add_thought(self.pick_comment("paused_drawdown"))
-                self.pause_until = now + 86400
+                self.pause_until = now + self.config.drawdown_pause_seconds
                 return True
         return False
+    
+    def get_current_leverage(self) -> int:
+        """根据连胜状态返回杠杆倍数"""
+        if self.consecutive_wins >= self.config.greedy_streak:
+            return self.config.greedy_leverage
+        return self.config.default_leverage
     
     def open_position(self, symbol: str, direction: str) -> bool:
         now = time.time()
         
         # 冷却
         if symbol in self.last_trade:
-            cd = self.config.cooldown_after_sl if symbol in self.positions else self.config.cooldown_general
+            cd = self.config.cooldown_after_sl if self.consecutive_losses > 0 else self.config.cooldown_general
             if now - self.last_trade[symbol] < cd:
                 return False
         
@@ -828,45 +755,49 @@ class TradingBot:
             return False
         
         price = klines[-1]["close"]
-        lev = self.strategy.get_leverage(symbol)
-        size = bal * self.config.position_size_min * lev / price
+        lev = self.get_current_leverage()
+        size = bal * self.config.position_size_pct * lev / price
         
-        offset = 0.0005
-        if direction == "long":
-            order_price = price * (1 - offset)
-            side = "BUY"
-        else:
-            order_price = price * (1 + offset)
-            side = "SELL"
+        # 设置逐仓 + 杠杆
+        try:
+            self.client.set_margin_type(symbol, "ISOLATED")
+        except:
+            pass
+        try:
+            self.client.set_leverage(symbol, lev)
+        except:
+            pass
+        
+        side = "BUY" if direction == "long" else "SELL"
         
         try:
-            result = self.client.place_order(symbol, side, "LIMIT", size, order_price)
+            result = self.client.place_order(symbol, side, "MARKET", size)
             if result.get("orderId"):
                 self.positions[symbol] = {
                     "direction": direction,
-                    "entry": order_price,
+                    "entry": price,
                     "qty": size,
                     "leverage": lev,
                     "open_time": now,
                 }
                 self.last_trade[symbol] = now
-                print(f"{symbol} 开{'多' if direction=='long' else '空'}成功")
+                coin = symbol.replace('USDT', '')
+                print(f"{symbol} 开{'多' if direction=='long' else '空'}成功 {lev}x")
                 self.append_trade_record({
                     "time": self.now_str(),
-                    "type": "BUY" if direction == "long" else "SELL",
+                    "type": side,
                     "symbol": symbol,
                     "amount": round(float(size), 4),
-                    "price": round(float(order_price), 6),
+                    "price": round(float(price), 6),
                     "pnl": 0.0,
-                    "reason": "趋势回调v2开仓",
+                    "reason": f"V4狙击开仓",
                     "balance": round(float(self.get_balance()), 4),
                     "leverage": lev,
                     "direction": direction,
                     "tradeAction": "OPEN",
                 })
-                coin = symbol.replace('USDT', '')
                 cat = "open_long" if direction == "long" else "open_short"
-                self.add_thought(self.pick_comment(cat, coin=coin, price=f"{order_price:.4f}"))
+                self.add_thought(self.pick_comment(cat, coin=coin, price=f"{price:.4f}", lev=lev))
                 return True
         except Exception as e:
             print(f"开仓失败: {e}")
@@ -884,49 +815,56 @@ class TradingBot:
             self.client.place_order(symbol, side, "MARKET", pos["qty"], reduce_only=True)
             realized = (close_price - pos["entry"]) * pos["qty"] if pos["direction"] == "long" else (pos["entry"] - close_price) * pos["qty"]
             coin = symbol.replace('USDT', '')
-            if reason == "trend_break":
-                self.add_thought(self.pick_comment("close_trend_break", coin=coin))
-            elif reason == "time_exit":
+            
+            # 解说
+            if reason == "time_exit":
                 self.add_thought(self.pick_comment("close_timeout", coin=coin))
-            elif reason == "stop_loss" or realized < 0:
+            elif reason in ["stop_loss"] or realized < 0:
                 self.add_thought(self.pick_comment("close_loss", coin=coin))
             else:
                 self.add_thought(self.pick_comment("close_profit", coin=coin))
+            
             self.append_trade_record({
                 "time": self.now_str(),
-                "type": "SELL" if pos["direction"] == "long" else "BUY",
+                "type": side,
                 "symbol": symbol,
                 "amount": round(float(pos["qty"]), 4),
                 "price": round(float(close_price), 6),
                 "pnl": round(float(realized), 4),
-                "reason": f"趋势回调v2平仓: {reason}",
+                "reason": f"V4平仓: {reason}",
                 "balance": round(float(self.get_balance()), 4),
                 "leverage": pos["leverage"],
                 "direction": pos["direction"],
                 "tradeAction": "CLOSE",
             })
             del self.positions[symbol]
-            print(f"{symbol} 平仓: {reason}")
-            if reason in ["stop_loss", "time_exit"]:
+            print(f"{symbol} 平仓: {reason}, PnL: {realized:.4f}")
+            
+            # 连胜/连亏统计
+            if realized > 0:
+                self.consecutive_wins += 1
+                self.consecutive_losses = 0
+                if self.consecutive_wins == self.config.greedy_streak:
+                    self.add_thought(self.pick_comment("greedy_on"))
+            else:
                 self.consecutive_losses += 1
+                if self.consecutive_wins >= self.config.greedy_streak:
+                    self.add_thought(self.pick_comment("greedy_off"))
+                self.consecutive_wins = 0
+                
         except Exception as e:
             print(f"平仓失败: {e}")
     
     def check_positions(self):
         now = time.time()
         for symbol, pos in list(self.positions.items()):
-            # 趋势破坏
-            if self.strategy.check_trend_break(symbol, pos["direction"]):
-                self.close_position(symbol, "trend_break")
-                continue
-            
-            # 超时
+            # 14分钟强制退出
             hold_mins = (now - pos["open_time"]) / 60
             if hold_mins >= self.config.time_exit_minutes:
                 self.close_position(symbol, "time_exit")
                 continue
             
-            # 价格检查
+            # 获取当前价格
             klines = self.client.get_klines(symbol, "1m", 1)
             if not klines:
                 continue
@@ -934,83 +872,93 @@ class TradingBot:
             entry = pos["entry"]
             d = pos["direction"]
             
-            pnl = (price - entry) / entry if d == "long" else (entry - price) / entry
+            pnl_pct = (price - entry) / entry if d == "long" else (entry - price) / entry
             
-            # 止损
-            sl = self.strategy.calc_sl(d, entry)
-            if (d == "long" and price <= sl) or (d == "short" and price >= sl):
+            # 硬止损
+            sl_pct = self.strategy.get_sl_pct(symbol)
+            if pnl_pct <= -sl_pct:
                 self.close_position(symbol, "stop_loss")
                 continue
             
-            # 止盈
-            tp1, tp2 = self.strategy.calc_tp(d, entry)
-            if pnl >= self.config.second_target_pct:
-                self.close_position(symbol, "tp2")
-            elif pnl >= self.config.first_target_pct and "tp1_triggered" not in pos:
+            # 止盈2: 2.5% 全平
+            if pnl_pct >= self.config.tp2_pct:
+                self.close_position(symbol, "tp2_full")
+                continue
+            
+            # 止盈1: 1.0% 平50%并移至保本
+            if pnl_pct >= self.config.tp1_pct and "tp1_triggered" not in pos:
                 pos["tp1_triggered"] = True
-                # 部分平仓
-                qty = pos["qty"] * 0.5
-                side = "SELL" if d == "long" else "BUY"
+                qty_half = pos["qty"] * self.config.tp1_close_pct
+                reduce_side = "SELL" if d == "long" else "BUY"
                 try:
-                    self.client.place_order(symbol, side, "MARKET", qty, reduce_only=True)
-                    pos["qty"] *= 0.5
-                    pos["entry"] = price  # 止损移至成本
-                except:
-                    pass
+                    self.client.place_order(symbol, reduce_side, "MARKET", qty_half, reduce_only=True)
+                    pos["qty"] -= qty_half
+                    pos["entry"] = price  # 止损移至保本
+                    coin = symbol.replace('USDT', '')
+                    self.add_thought(self.pick_comment("close_tp1", coin=coin))
+                    print(f"{symbol} TP1触发，减仓50%，止损移至保本")
+                except Exception as e:
+                    print(f"TP1减仓失败: {e}")
     
     def scan_and_trade(self) -> tuple[list[str], Optional[dict[str, Any]]]:
         events = []
         top_signal = None
         self.update_universe()
         
-        ok, reason = self.strategy.check_market_filter()
+        # 市场过滤
+        ok, reason, zone = self.strategy.check_market_filter()
         if not ok:
             events.append(reason)
             self.add_thought(self.pick_comment("market_filter_fail", reason=reason))
             return events, top_signal
         
-        for symbol in self.trading_coins:
-            ok, reason = self.strategy.check_trend_filter(symbol)
+        # 按优先级排序：核心池优先
+        sorted_coins = sorted(
+            self.trading_coins,
+            key=lambda c: (0 if c in CORE_COINS else 1)
+        )
+        
+        for symbol in sorted_coins:
+            coin = symbol.replace('USDT', '')
+            
+            # 死鱼盘检测
+            ok, fish_reason = self.strategy.check_dead_fish(symbol)
             if not ok:
-                coin = symbol.replace('USDT', '')
-                events.append(f"{coin}: {reason}")
-                self.add_thought(self.pick_comment("trend_skip", coin=coin, reason=reason))
+                events.append(f"{coin}: {fish_reason}")
+                self.add_thought(self.pick_comment("dead_fish", coin=coin, reason=fish_reason))
                 continue
             
-            trend = self.strategy.identify_trend(symbol)
+            # 方向判定
+            direction = self.strategy.identify_direction(symbol)
+            
+            # 如果大盘禁多，只允许做空
+            if zone == "blocked" and direction == "long":
+                events.append(f"{coin}: 大盘禁多")
+                continue
+            
+            if direction == "unknown":
+                events.append(f"{coin}: 方向不明")
+                self.add_thought(self.pick_comment("trend_skip", coin=coin))
+                continue
+            
             if top_signal is None:
-                top_signal = {
-                    "symbol": symbol,
-                    "direction": "long" if trend == "uptrend" else "short" if trend == "downtrend" else None,
-                    "score": None,
-                }
+                top_signal = {"symbol": symbol, "direction": direction, "score": None}
             
-            if trend == "uptrend":
-                ok, cond = self.strategy.check_long_entry(symbol)
-                if ok:
-                    coin = symbol.replace('USDT', '')
-                    cond_str = ' / '.join(cond)
-                    print(f"{symbol} 多单信号")
-                    events.append(f"{coin} 做多 {'/'.join(cond)}")
-                    self.add_thought(self.pick_comment("long_signal", coin=coin, cond=cond_str))
-                    self.open_position(symbol, "long")
-            
-            elif trend == "downtrend":
-                ok, cond = self.strategy.check_short_entry(symbol)
-                if ok:
-                    coin = symbol.replace('USDT', '')
-                    cond_str = ' / '.join(cond)
-                    print(f"{symbol} 空单信号")
-                    events.append(f"{coin} 做空 {'/'.join(cond)}")
-                    self.add_thought(self.pick_comment("short_signal", coin=coin, cond=cond_str))
-                    self.open_position(symbol, "short")
+            # 入场检测
+            ok, cond = self.strategy.check_entry(symbol, direction)
+            if ok:
+                cond_str = ' / '.join(cond)
+                print(f"{symbol} {'多' if direction == 'long' else '空'}单信号: {cond_str}")
+                events.append(f"{coin} {'做多' if direction == 'long' else '做空'} {'/'.join(cond)}")
+                
+                cat = "long_signal" if direction == "long" else "short_signal"
+                self.add_thought(self.pick_comment(cat, coin=coin, cond=cond_str))
+                self.open_position(symbol, direction)
+        
         return events, top_signal
     
-    def update_strategy_display(self):
-        self.update_status()
-
     def tick(self) -> None:
-        events = [f"V2扫描 {datetime.now().strftime('%H:%M:%S')}"]
+        events = [f"V4扫描 {datetime.now().strftime('%H:%M:%S')}"]
         self.add_thought(self.pick_comment("scan_start"))
         self.check_positions()
         scan_events, top_signal = self.scan_and_trade()
@@ -1026,7 +974,7 @@ class TradingBot:
     
     def run(self):
         print("=" * 50)
-        print("趋势回调策略 v2.0 启动")
+        print("狂暴动量策略 v4.0 启动")
         print("=" * 50)
         
         self.highest_balance = self.get_balance()
@@ -1034,7 +982,7 @@ class TradingBot:
         while True:
             try:
                 if self.is_paused():
-                    self.update_status(events=["paused"])
+                    self.update_status(events=["熔断暂停中..."])
                     time.sleep(60)
                     continue
 
