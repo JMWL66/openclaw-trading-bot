@@ -1,5 +1,5 @@
 {
-  "last_run": "2026-03-13 16:06:25",
+  "last_run": "2026-03-13 16:31:25",
   "balance": 38.7154,
   "equity": 38.7154,
   "unrealized_pnl": 0.0,
@@ -11,23 +11,25 @@
     "ETH",
     "SOL",
     "BNB",
-    "HYPE",
-    "PIXEL",
-    "XRP"
+    "ALPACA",
+    "BNX",
+    "ALPHA"
   ],
   "top_signal": {
-    "symbol": "HYPEUSDT",
-    "direction": "short",
+    "symbol": null,
+    "direction": null,
     "score": null
   },
   "strategy_changes": [],
   "events": [
-    "V4扫描 16:06:23",
+    "V4扫描 16:31:24",
     "BTC: 方向不明",
     "ETH: 方向不明",
     "SOL: 方向不明",
     "BNB: 方向不明",
-    "XRP: 方向不明"
+    "ALPACA: 当前处于死鱼盘（十字星100%），换场子！",
+    "BNX: 当前处于死鱼盘（十字星100%），换场子！",
+    "ALPHA: 当前处于死鱼盘（十字星100%），换场子！"
   ],
   "strategy_v2": {
     "version": "狂暴动量v4.0",
@@ -41,9 +43,9 @@
       "ETH",
       "SOL",
       "BNB",
-      "HYPE",
-      "PIXEL",
-      "XRP"
+      "ALPACA",
+      "BNX",
+      "ALPHA"
     ],
     "topN": 7
   }
