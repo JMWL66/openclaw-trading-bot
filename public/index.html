@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OKX AI Trading Challenge</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="css/style.css">
+
+</head>
+<body>
+    <div class="app-shell">
+        <header class="shell-card topbar">
+            <div class="brand-wrap">
+                <div class="eyebrow">OKX Agent Trade Kit · AI 自动交易</div>
+                <h1 class="brand-title">
+                    <span id="brandName">OpenClaw</span>
+                    <span class="glow" id="brandSubtitle">OKX AI Trading Challenge</span>
+                </h1>
+
+                <div class="broadcast-ribbon">
+                    <div class="broadcast-track" id="broadcastTrack"></div>
+                </div>
+
+                <div class="news-ribbon">
+                    <div class="news-track" id="newsTrack">
+                        <div class="news-segment">
+                            <span class="news-item">📰 正在加载实时币圈新闻...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="topbar-side">
+                <div class="topbar-chips">
+
+                    <div class="live-chip" id="liveChip" title="当前监控交易员" style="padding-right: 6px;">
+                        <span class="status-dot" id="statusDot"></span>
+                        <div class="live-copy">
+                            <span class="label" id="liveLabel">监控终端</span>
+                            <span class="meta" id="liveMeta" style="display:none;">--</span>
+                        </div>
+                        <select id="activeTraderSelect" onchange="changeActiveTrader()" style="background:transparent; border:none; color:var(--text); font-family:'Orbitron',sans-serif; font-size:0.78rem; font-weight:700; max-width:120px; outline:none; cursor:pointer;-webkit-appearance:none; padding:0; margin-left:4px;">
+                            <option value="" style="background:#0a1324;">暂无实例</option>
+                        </select>
+                        <span class="clock" id="liveClock">00:00:00</span>
+                    </div>
+                    <div class="streaming-chip" style="border-color: rgba(108, 183, 255, 0.4); color: var(--text-soft);" onclick="openSettingsModal()" title="系统配置中心">
+                        <span style="font-size: 1.1rem; line-height: 1;">⚙️ 管理</span>
+                    </div>
+                </div>
+
+                <div class="mini-matrix" id="marketOverviewGrid">
+                    <div class="coin-row" id="coin-BTC">
+                        <div class="coin-icon">₿</div>
+                        <div class="coin-info">
+                            <div class="coin-name">BTC</div>
+                            <div class="coin-price" id="price-BTC">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-BTC">--</div>
+                            <div class="coin-extra" id="extra-BTC">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                    <div class="coin-row" id="coin-ETH">
+                        <div class="coin-icon">Ξ</div>
+                        <div class="coin-info">
+                            <div class="coin-name">ETH</div>
+                            <div class="coin-price" id="price-ETH">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-ETH">--</div>
+                            <div class="coin-extra" id="extra-ETH">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                    <div class="coin-row" id="coin-SOL">
+                        <div class="coin-icon">◎</div>
+                        <div class="coin-info">
+                            <div class="coin-name">SOL</div>
+                            <div class="coin-price" id="price-SOL">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-SOL">--</div>
+                            <div class="coin-extra" id="extra-SOL">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                    <div class="coin-row" id="coin-DOGE">
+                        <div class="coin-icon">Ð</div>
+                        <div class="coin-info">
+                            <div class="coin-name">DOGE</div>
+                            <div class="coin-price" id="price-DOGE">--</div>
+                        </div>
+                        <div class="coin-stats">
+                            <div class="coin-change up" id="change-DOGE">--</div>
+                            <div class="coin-extra" id="extra-DOGE">资费 -- | 多空 --</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <section class="overview-grid">
+            <div class="shell-card metric-card metric-finance">
+                <div class="metric-top">
+                    <span>账户净值</span>
+                    <div class="metric-orb positive"></div>
+                </div>
+                <div class="metric-value positive" id="currentBalance">--</div>
+                <div class="metric-note">当前账户净值</div>
+            </div>
+
+            <div class="shell-card metric-card">
+                <div class="metric-top">
+                    <span>持仓盈亏</span>
+                    <div class="metric-orb neutral"></div>
+                </div>
+                <div class="metric-value neutral" id="positionPnl">--</div>
+                <div class="metric-note">所有持仓合计</div>
+            </div>
+
+            <div class="shell-card metric-card metric-finance">
+                <div class="metric-top">
+                    <span>总收益</span>
+                    <div class="metric-orb positive"></div>
+                </div>
+                <div class="metric-value positive" id="totalPnl">--</div>
+                <div class="metric-note">盈利额排行榜</div>
+            </div>
+
+            <div class="shell-card metric-card metric-finance">
+                <div class="metric-top">
+                    <span>收益率</span>
+                    <div class="metric-orb positive"></div>
+                </div>
+                <div class="metric-value positive" id="yieldRate">--</div>
+                <div class="metric-note">收益率排行榜</div>
+            </div>
+
+            <div class="shell-card metric-card">
+                <div class="metric-top">
+                    <span>交易次数</span>
+                    <div class="metric-orb neutral"></div>
+                </div>
+                <div class="metric-value neutral" id="totalTrades">--</div>
+                <div class="metric-note">累计成交记录</div>
+            </div>
+
+            <div class="shell-card metric-card">
+                <div class="metric-top">
+                    <span>交易胜率</span>
+                    <div class="metric-orb neutral"></div>
+                </div>
+                <div class="metric-value neutral" id="winRate">--</div>
+                <div class="metric-note">已平仓交易统计</div>
+            </div>
+
+            <div class="shell-card metric-card">
+                <div class="metric-top">
+                    <span>交易标的</span>
+                    <div class="metric-orb neutral"></div>
+                </div>
+                <div class="metric-value neutral" id="tradingCoins" style="font-size: 0.92rem; line-height: 1.42; white-space: normal; word-break: normal; overflow-wrap: anywhere;">--</div>
+                <div class="metric-note">USDT-M 永续合约</div>
+            </div>
+        </section>
+
+        <main class="dashboard-grid">
+            <div class="layout-column left-column">
+                <section class="shell-card panel chart-panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">资金曲线</div>
+                            <div class="panel-title">资产增长轨迹</div>
+                            <div class="panel-desc">按 1 分钟采样，优先看资金变化。</div>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="balanceChart"></canvas>
+                    </div>
+                </section>
+
+                <section class="shell-card panel strategy-panel">
+                    <div class="strategy-shell">
+                        <div class="strategy-header">
+                            <div>
+                                <div class="strategy-kicker">当前策略</div>
+                                <div class="strategy-summary" id="strategySummary">--</div>
+                            </div>
+                            <div class="strategy-leverage">
+                                <span>杠杆</span>
+                                <strong id="strategyHeroLeverage">--</strong>
+                            </div>
+                        </div>
+
+                        <div class="strategy-lines">
+                            <div class="strategy-line">
+                                <span>交易币种</span>
+                                <strong id="strategyCoins">--</strong>
+                            </div>
+
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="layout-column center-column">
+                <section class="shell-card panel trades-panel mode-position" id="tradePanel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">成交流水</div>
+                            <div class="panel-title" id="tradePanelTitle">当前持仓</div>
+                            <div class="panel-desc" id="tradePanelDesc">实时持仓和浮盈浮亏。</div>
+                        </div>
+                        <div class="head-chip" onclick="toggleTradePanelMode()" title="点击切换当前持仓/交易记录">
+                            <span id="tradePanelChipLabel">当前显示</span>
+                            <strong id="tradePanelModeLabel">当前持仓</strong>
+                        </div>
+                    </div>
+
+                    <div class="panel-view table-wrap" id="positionView">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>方向</th>
+                                    <th>币种</th>
+                                    <th>开仓价</th>
+                                    <th>现价</th>
+                                    <th>杠杆</th>
+                                    <th>盈亏</th>
+                                </tr>
+                            </thead>
+                            <tbody id="positionTable">
+                                <tr><td colspan="7" class="table-empty">暂无持仓</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="panel-view table-wrap is-hidden" id="tradeTableView">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>操作</th>
+                                    <th>方向</th>
+                                    <th>币种</th>
+                                    <th>价格</th>
+                                    <th>杠杆</th>
+                                    <th>盈亏</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tradeTable"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <div class="layout-column right-column">
+                <section class="shell-card panel thinking-panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">MiniMax AI 决策</div>
+                            <div class="panel-title">实时思考流</div>
+                            <div class="panel-desc">AI Agent 分析与交易决策记录</div>
+                        </div>
+                        <div class="head-chip">
+                            <span>扫描节奏</span>
+                            <strong id="aiScanFreq">--</strong>
+                        </div>
+                    </div>
+
+                    <div class="thinking-list" id="thinkingList">
+                        <div class="empty-state">加载中...</div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-content" style="max-width: 700px; max-height: 85vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h2 class="modal-title">⚙️ 系统 & 交易员管理中心</h2>
+                <div class="modal-close" onclick="closeSettingsModal()">✕</div>
+            </div>
+            
+            <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid rgba(118, 167, 255, 0.2); padding-bottom: 10px; overflow-x:auto;">
+                <button class="btn" id="tabSysBtn" style="background:#00f7b2; color:#000; flex-shrink:0;" onclick="switchTab('sys')">系统配置</button>
+                <button class="btn btn-cancel" id="tabAiBtn" style="flex-shrink:0;" onclick="switchTab('ai')">AI模型管理</button>
+                <button class="btn btn-cancel" id="tabExBtn" style="flex-shrink:0;" onclick="switchTab('ex')">交易所管理</button>
+                <button class="btn btn-cancel" id="tabBotsBtn" style="flex-shrink:0;" onclick="switchTab('bots')">交易员阵列</button>
+                <button class="btn btn-cancel" id="tabSkillBtn" style="flex-shrink:0;" onclick="switchTab('skill')">SKILL策略</button>
+            </div>
+            
+            <div id="tab-sys">
+                <form id="settingsForm">
+                    <div style="font-size:0.8rem; color:var(--text-soft); margin-bottom:15px;">自定义你的交易面板名称和标题。</div>
+                    <div class="form-group">
+                        <label class="form-label">品牌名称 <span style="color:var(--text-mute); font-size:0.75rem;">(主标题左侧大字)</span></label>
+                        <input type="text" class="form-input" name="web_brand" placeholder="例如：OpenClaw">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">副标题 <span style="color:var(--text-mute); font-size:0.75rem;">(主标题右侧发光字)</span></label>
+                        <input type="text" class="form-input" name="web_title" placeholder="例如：OKX AI Trading Challenge">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-cancel" onclick="closeSettingsModal()">取消</button>
+                        <button type="submit" class="btn btn-save" id="saveSystemSettingsBtn">保存全局配置</button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="tab-ai" style="display:none;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center;">
+                    <h3 style="color:var(--text); font-size:1.1rem;">AI 模型配置</h3>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-soft); margin-bottom:15px;">配置 AI 提供商的信息。当前内置支持 MiniMax、Qwen 等模型引擎。</div>
+                <div style="display:grid; gap:12px;">
+                    <div class="form-group">
+                        <label class="form-label">节点名称</label>
+                        <input type="text" class="form-input" id="ai_node_id" value="minimax_1" placeholder="minimax_1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" class="form-input" id="ai_api_key" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Base URL</label>
+                        <input type="text" class="form-input" id="ai_base_url" value="https://api.minimax.io/v1" placeholder="https://api.minimax.io/v1">
+                    </div>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                        <div class="form-group">
+                            <label class="form-label">模型</label>
+                            <select class="form-input form-select" id="ai_model">
+                                <option value="MiniMax-M2.7">MiniMax-M2.7</option>
+                                <option value="MiniMax-M2.7-highspeed">MiniMax-M2.7-highspeed</option>
+                                <option value="MiniMax-M2.5">MiniMax-M2.5</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">类型</label>
+                            <input type="text" class="form-input" value="minimax" disabled style="opacity:0.6;">
+                        </div>
+                    </div>
+                    <div id="aiTestResult" style="display:none; padding:8px 12px; border-radius:8px; font-size:0.8rem; margin-top:4px;"></div>
+                </div>
+                <div class="form-actions" style="justify-content:space-between;">
+                    <button type="button" class="btn btn-cancel" onclick="document.getElementById('ai_node_id').value = 'minimax_' + Math.floor(Math.random()*1000); document.getElementById('ai_api_key').value='';">➕ 新增配置</button>
+                    <button type="button" class="btn btn-save" onclick="saveComponentConfig('ai')">保存 AI 配置</button>
+                </div>
+            </div>
+
+            <div id="tab-ex" style="display:none;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center;">
+                    <h3 style="color:var(--text); font-size:1.1rem;">OKX 交易所配置</h3>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-soft); margin-bottom:15px;">配置 OKX 交易所 API 密钥。请在 <a href="https://www.okx.com/account/my-api" target="_blank" style="color:var(--cyan);">OKX API 管理页面</a> 创建。</div>
+                <div style="display:grid; gap:12px;">
+                    <div class="form-group">
+                        <label class="form-label">节点名称</label>
+                        <input type="text" class="form-input" id="ex_node_id" value="okx_1" placeholder="okx_1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" class="form-input" id="ex_api_key" placeholder="例如: bfc766c7-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Secret Key</label>
+                        <input type="password" class="form-input" id="ex_secret_key" placeholder="例如: F6ADC8A4CEC231A24010589B23B010B4">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Passphrase (API密码短语)</label>
+                        <input type="password" class="form-input" id="ex_passphrase" placeholder="创建 API Key 时设定的密码">
+                    </div>
+                    <div style="display:flex; align-items:center; gap:20px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem; color:var(--text-soft);">
+                            <input type="checkbox" id="ex_competition_mode" style="width:16px; height:16px; accent-color:#00f7b2;">
+                            始终使用竞赛模式 (强制调用CLI)
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem; color:var(--text-soft);">
+                            <input type="checkbox" id="ex_is_demo" style="width:16px; height:16px; accent-color:#00f7b2;">
+                            Demo 模式 (模拟交易)
+                        </label>
+                    </div>
+                </div>
+                <div class="form-actions" style="justify-content:space-between;">
+                    <button type="button" class="btn btn-cancel" onclick="document.getElementById('ex_node_id').value = 'okx_' + Math.floor(Math.random()*1000); document.getElementById('ex_api_key').value=''; document.getElementById('ex_secret_key').value=''; document.getElementById('ex_passphrase').value='';">➕ 新增配置</button>
+                    <button type="button" class="btn btn-save" onclick="saveComponentConfig('ex')">保存交易所配置</button>
+                </div>
+            </div>
+
+            <div id="tab-skill" style="display:none;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center;">
+                    <h3 style="color:var(--text); font-size:1.1rem;">SKILL.md 策略编辑器</h3>
+                    <button class="btn btn-save" style="padding: 6px 12px; font-size:0.8rem;" onclick="loadSkillContent()">刷新</button>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-soft); margin-bottom:15px;">
+                    编辑 AI 交易策略文件 (SKILL.md)。此文件定义 AI Agent 的交易规则，比赛结束后需提交。
+                    <br>当前交易员: <strong id="skillTraderLabel" style="color:var(--cyan);">--</strong>
+                </div>
+                <textarea id="skillContentEditor" style="width:100%; height:320px; background:rgba(4,12,24,0.8); color:#00f7b2; border:1px solid rgba(118,167,255,0.2); border-radius:8px; padding:12px; font-family:monospace; font-size:0.85rem; line-height:1.5; resize:vertical;" placeholder="# 在此编写你的 SKILL.md 策略..."></textarea>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-cancel" onclick="downloadSkillFile()">下载 SKILL.md</button>
+                    <button type="button" class="btn btn-save" onclick="saveSkillContent()">保存策略</button>
+                </div>
+            </div>
+
+            <div id="tab-bots" style="display:none;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center;">
+                    <h3 style="color:var(--text); font-size:1.1rem;">活跃交易员序列</h3>
+                    <button class="btn btn-save" style="padding: 6px 12px; font-size:0.8rem;" onclick="showCreateTraderForm()">+ 新建 AI 交易员</button>
+                </div>
+                <div id="traderListContainer" style="display:grid; gap:10px;"></div>
+
+                <!-- Create Form -->
+                <div id="createTraderForm" style="display:none; margin-top:20px; border:1px solid rgba(0,247,178,0.3); padding:15px; border-radius:var(--radius-sm);">
+                    <h4 style="color:var(--cyan); margin-bottom:10px;">配置新交易员</h4>
+                    <form id="newTraderForm">
+                        <div class="form-group"><label class="form-label">交易员标识 (唯一ID)</label><input type="text" name="id" class="form-input"></div>
+                        <div class="form-group"><label class="form-label">交易员昵称</label><input type="text" name="name" class="form-input"></div>
+                        <div class="form-group"><label class="form-label">绑定 AI 节点</label><select name="ai_provider" id="form_ai_provider" class="form-input form-select"></select></div>
+                        <div class="form-group"><label class="form-label">绑定 交易所</label><select name="exchange" id="form_exchange" class="form-input form-select"></select></div>
+                        <div class="form-group"><label class="form-label">扫描频率(秒)</label><input type="number" name="scan_frequency" class="form-input" value="30"></div>
+                        <div class="form-group"><label class="form-label">上传 AI 策略 Skill 文件</label><input type="file" name="skill_file" class="form-input"></div>
+                        <div class="form-actions" style="margin-top:10px;">
+                            <button type="button" class="btn btn-cancel" onclick="document.getElementById('createTraderForm').style.display='none'">取消</button>
+                            <button type="submit" class="btn" style="background:#00f7b2; color:#000;">完成创建</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+        <script src="js/app.js"></script>
+
+</body>
+</html>

@@ -2,3 +2,11 @@
 __pycache__/
 *.log
 .DS_Store
+
+# Data and Secrets
+data/sessions/
+data/history/
+data/runtime/
+data/*.json
+data/*.txt
+!data/.keep
