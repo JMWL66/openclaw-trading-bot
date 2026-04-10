@@ -11,7 +11,7 @@ let chart = null;
             ? 'http://127.0.0.1:5000'
             : window.location.origin;
         const SOURCE_UTC_OFFSET_HOURS = 9;
-        const DISPLAY_TIMEZONE = 'Asia/Shanghai';
+        const DISPLAY_TIMEZONE = 'Asia/Tokyo';
         const initialBalance = 0;
         const majorCoins = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'ADA', 'LINK', 'AVAX', 'LTC'];
 

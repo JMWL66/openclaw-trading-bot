@@ -132,9 +132,46 @@ class MiniMaxEngine:
 - 买一价: {ticker.get('bidPx', 'N/A')}
 - 卖一价: {ticker.get('askPx', 'N/A')}""")
 
+            # K-line data (1H)
+            candles_1h = data.get("candles_1h", [])
+            if candles_1h:
+                sections.append(f"\n#### {inst_id} 1H K线 (最近 {len(candles_1h)} 根)")
+                sections.append("| 时间戳 | 开 | 高 | 低 | 收 | 成交量 |")
+                sections.append("|--------|-----|-----|-----|-----|--------|")
+                for c in candles_1h:
+                    if isinstance(c, list) and len(c) >= 6:
+                        sections.append(f"| {c[0]} | {c[1]} | {c[2]} | {c[3]} | {c[4]} | {c[5]} |")
+
+            # K-line data (4H)
+            candles_4h = data.get("candles_4h", [])
+            if candles_4h:
+                sections.append(f"\n#### {inst_id} 4H K线 (最近 {len(candles_4h)} 根)")
+                sections.append("| 时间戳 | 开 | 高 | 低 | 收 | 成交量 |")
+                sections.append("|--------|-----|-----|-----|-----|--------|")
+                for c in candles_4h:
+                    if isinstance(c, list) and len(c) >= 6:
+                        sections.append(f"| {c[0]} | {c[1]} | {c[2]} | {c[3]} | {c[4]} | {c[5]} |")
+
+            # Funding rate
+            fr = data.get("funding_rate")
+            if fr:
+                sections.append(f"\n#### {inst_id} 资金费率")
+                sections.append(f"- 当前费率: {fr.get('fundingRate', 'N/A')}")
+                sections.append(f"- 下次费率: {fr.get('nextFundingRate', 'N/A')}")
+                sections.append(f"- 下次结算时间: {fr.get('nextFundingTime', 'N/A')}")
+
+            # Open interest
+            oi = data.get("open_interest")
+            if oi:
+                sections.append(f"\n#### {inst_id} 持仓量 (OI)")
+                sections.append(f"- 持仓量: {oi.get('oi', 'N/A')}")
+                sections.append(f"- 持仓量币数: {oi.get('oiCcy', 'N/A')}")
+
         # Account info
+        details = account.get("details", [])
+        avail_bal = details[0].get("availBal", "N/A") if details else account.get("availBal", "N/A")
         sections.append(f"\n## 账户状态")
-        sections.append(f"- 可用余额 (USDT): {account.get('availBal', account.get('totalEq', 'N/A'))}")
+        sections.append(f"- 可用余额 (USDT): {avail_bal}")
         sections.append(f"- 总权益: {account.get('totalEq', 'N/A')}")
         sections.append(f"- 已用保证金: {account.get('imr', 'N/A')}")
 

@@ -159,8 +159,7 @@ def get_balance(ccy: str = "USDT") -> dict | None:
     # REST
     data = _rest_get(f"/api/v5/account/balance?ccy={ccy}", auth=True)
     if isinstance(data, list) and data:
-        details = data[0].get("details", [])
-        return details[0] if details else data[0]
+        return data[0]
     return None
 
 
@@ -263,6 +262,53 @@ def close_position(inst_id: str, margin_mode: str = "cross") -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# ──────────────── Extended Market Data ────────────────
+
+def get_candles(inst_id: str, bar: str = "1H", limit: int = 20) -> list:
+    """Fetch K-line / candlestick data.
+    bar options: 1m, 5m, 15m, 30m, 1H, 2H, 4H, 1D, etc.
+    Returns list of [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm].
+    """
+    if _check_cli():
+        data = _run_cli(["market", "candles", inst_id, "--bar", bar, "--limit", str(limit)])
+        return data if isinstance(data, list) else []
+    # REST — public, no auth needed
+    data = _rest_get(f"/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}")
+    return data if isinstance(data, list) else []
+
+
+def get_funding_rate(inst_id: str) -> dict | None:
+    """Fetch current funding rate for a SWAP instrument."""
+    if _check_cli():
+        data = _run_cli(["market", "funding-rate", inst_id])
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list) and data:
+            return data[0]
+        return None
+    # REST — public
+    data = _rest_get(f"/api/v5/public/funding-rate?instId={inst_id}")
+    if isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def get_open_interest(inst_id: str) -> dict | None:
+    """Fetch open interest for a SWAP instrument."""
+    if _check_cli():
+        data = _run_cli(["market", "open-interest", "--instType", "SWAP", "--instId", inst_id])
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list) and data:
+            return data[0]
+        return None
+    # REST — public
+    data = _rest_get(f"/api/v5/public/open-interest?instType=SWAP&instId={inst_id}")
+    if isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
 # ──────────────── Helpers ────────────────
 
 def normalize_inst_id(symbol: str) -> str:
@@ -279,10 +325,40 @@ def normalize_inst_id(symbol: str) -> str:
 
 
 def get_market_summary(instruments: list[str]) -> dict[str, Any]:
+    """Fetch comprehensive market data for all instruments.
+    Includes: ticker, 1H & 4H candles, funding rate, open interest.
+    """
     summary: dict[str, Any] = {}
     for inst in instruments:
         inst_id = normalize_inst_id(inst)
         ticker = get_ticker(inst_id)
-        if ticker:
-            summary[inst_id] = {"ticker": ticker, "inst_id": inst_id}
+        if not ticker:
+            continue
+
+        entry: dict[str, Any] = {"ticker": ticker, "inst_id": inst_id}
+
+        # K-line data (1H latest 6 bars, 4H latest 6 bars)
+        try:
+            entry["candles_1h"] = get_candles(inst_id, bar="1H", limit=6)
+        except Exception:
+            entry["candles_1h"] = []
+        try:
+            entry["candles_4h"] = get_candles(inst_id, bar="4H", limit=6)
+        except Exception:
+            entry["candles_4h"] = []
+
+        # Funding rate
+        try:
+            entry["funding_rate"] = get_funding_rate(inst_id)
+        except Exception:
+            entry["funding_rate"] = None
+
+        # Open interest
+        try:
+            entry["open_interest"] = get_open_interest(inst_id)
+        except Exception:
+            entry["open_interest"] = None
+
+        summary[inst_id] = entry
     return summary
+

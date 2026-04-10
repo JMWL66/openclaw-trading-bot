@@ -189,7 +189,8 @@ def main():
         nonlocal start_balance
 
         total_eq = float(account.get("totalEq", 0))
-        avail_bal = float(account.get("availBal", 0))
+        details = account.get("details", [])
+        avail_bal = float(details[0].get("availBal", 0)) if details else float(account.get("availBal", 0))
         unrealized = sum(float(p.get("upl", 0)) for p in positions)
 
         if start_balance is None:

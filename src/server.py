@@ -12,7 +12,7 @@ import requests as py_requests
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="../public", static_url_path="")
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 BASE_DIR = Path(__file__).resolve().parent.parent
