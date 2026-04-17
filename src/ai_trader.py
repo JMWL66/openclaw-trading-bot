@@ -353,8 +353,14 @@ def main():
                 logging.warning(f"Gainer scan failed ({_e}), using static watchlist")
 
             # 1. Fetch market data
+            # Always include BTC for macro check（Step 0 in SKILL），even if not in candidate pool
+            BTC_MACRO_INST = "BTC-USDT-SWAP"
+            watchlist_with_btc = effective_watchlist.copy()
+            if BTC_MACRO_INST not in watchlist_with_btc:
+                watchlist_with_btc.insert(0, BTC_MACRO_INST)
+                logging.info(f"Injected {BTC_MACRO_INST} for macro check")
             logging.info("Fetching market data from OKX...")
-            market_data = fetch_market_data(effective_watchlist)
+            market_data = fetch_market_data(watchlist_with_btc)
             if not market_data:
                 logging.warning("No market data received, retrying next cycle.")
                 events.append({
