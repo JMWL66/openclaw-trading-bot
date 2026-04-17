@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -43,11 +44,114 @@ def save_system_config(config: dict[str, Any]):
     SYSTEM_CONFIG_FILE.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _parse_optional_positive_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    number = float(text)
+    if number <= 0:
+        raise ValueError("初始交易金额必须大于 0")
+    return number
+
+
+def _sync_trader_status_start_balance(trader_id: str, initial_balance: float | None):
+    if initial_balance is None:
+        return
+    status_file = SESSIONS_DIR / trader_id / "status.json"
+    if not status_file.exists():
+        return
+    try:
+        status = json.loads(status_file.read_text(encoding="utf-8"))
+        current_equity = float(status.get("equity", status.get("balance", 0)) or 0)
+        status["start_balance"] = initial_balance
+        status["yield_rate"] = round(
+            (current_equity - initial_balance) / initial_balance if initial_balance > 0 else 0,
+            6,
+        )
+        status["total_profit"] = round(current_equity - initial_balance, 2)
+        status_file.write_text(json.dumps(status, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _pid_is_running(pid: Any) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _stop_pid(pid: Any, timeout: float = 2.0) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid_int <= 0:
+        return True
+    try:
+        os.kill(pid_int, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _pid_is_running(pid_int):
+            return True
+        time.sleep(0.1)
+    try:
+        os.kill(pid_int, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    return not _pid_is_running(pid_int)
+
+
+def _refresh_trader_statuses(config: dict[str, Any]) -> dict[str, Any]:
+    traders = config.get("traders", {})
+    changed = False
+    with process_lock:
+        for tid, tinfo in traders.items():
+            proc = active_processes.get(tid)
+            is_running = False
+            if proc is not None:
+                if proc.poll() is None:
+                    is_running = True
+                    if tinfo.get("pid") != proc.pid:
+                        tinfo["pid"] = proc.pid
+                        changed = True
+                else:
+                    del active_processes[tid]
+            elif _pid_is_running(tinfo.get("pid")):
+                is_running = True
+            else:
+                if tinfo.pop("pid", None) is not None:
+                    changed = True
+
+            next_status = "running" if is_running else "stopped"
+            if tinfo.get("status") != next_status:
+                tinfo["status"] = next_status
+                changed = True
+    if changed:
+        save_system_config(config)
+    return traders
+
+
 @app.after_request
 def add_no_store_headers(response):
     if (
         request.path.startswith("/data/")
         or request.path.startswith("/api/")
+        or request.path.startswith("/js/")
+        or request.path.startswith("/css/")
         or request.path in {"/", "/index.html"}
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -64,7 +168,9 @@ def index():
 
 @app.route("/api/system/config", methods=["GET"])
 def get_config():
-    return jsonify(get_system_config()), 200
+    config = get_system_config()
+    _refresh_trader_statuses(config)
+    return jsonify(config), 200
 
 @app.route("/api/system/config", methods=["POST"])
 def update_config():
@@ -92,21 +198,8 @@ def update_config():
 @app.route("/api/traders", methods=["GET"])
 def list_traders():
     config = get_system_config()
-    traders = config.get("traders", {})
-    
-    # Check actual run statuses
-    with process_lock:
-        for tid, tinfo in traders.items():
-            proc = active_processes.get(tid)
-            if proc is not None:
-                if proc.poll() is None:
-                    tinfo["status"] = "running"
-                else:
-                    tinfo["status"] = "stopped"
-                    del active_processes[tid]
-            else:
-                tinfo["status"] = "stopped"
-                
+    traders = _refresh_trader_statuses(config)
+
     return jsonify({"traders": traders}), 200
 
 @app.route("/api/traders", methods=["POST"])
@@ -120,11 +213,17 @@ def create_or_update_trader():
         
         trader_info = traders.get(tid, {"status": "stopped"})
         trader_info.update({
-            "name": req_data.get("name", tid),
-            "exchange": req_data.get("exchange", ""),
-            "ai_provider": req_data.get("ai_provider", ""),
-            "scan_frequency": req_data.get("scan_frequency", 15),
+            "name": req_data.get("name", trader_info.get("name", tid)),
+            "exchange": req_data.get("exchange", trader_info.get("exchange", "")),
+            "ai_provider": req_data.get("ai_provider", trader_info.get("ai_provider", "")),
+            "scan_frequency": req_data.get("scan_frequency", trader_info.get("scan_frequency", 15)),
         })
+
+        initial_balance = _parse_optional_positive_float(req_data.get("initial_balance"))
+        if initial_balance is None:
+            trader_info.pop("initial_balance", None)
+        else:
+            trader_info["initial_balance"] = initial_balance
         
         # File upload support
         if "skill_file" in request.files:
@@ -139,7 +238,10 @@ def create_or_update_trader():
             
         traders[tid] = trader_info
         save_system_config(config)
+        _sync_trader_status_start_balance(tid, initial_balance)
         return jsonify({"status": "success", "traders": traders}), 200
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 500
 
@@ -173,6 +275,11 @@ def start_trader(trader_id: str):
         proc = active_processes.get(trader_id)
         if proc and proc.poll() is None:
             return jsonify({"status": "already_running"}), 200
+        existing_pid = traders[trader_id].get("pid")
+        if _pid_is_running(existing_pid):
+            traders[trader_id]["status"] = "running"
+            save_system_config(config)
+            return jsonify({"status": "already_running", "pid": int(existing_pid)}), 200
             
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         session_dir = SESSIONS_DIR / trader_id
@@ -236,21 +343,26 @@ def stop_trader(trader_id: str):
     config = get_system_config()
     with process_lock:
         proc = active_processes.get(trader_id)
-        if not proc or proc.poll() is not None:
+        pid = config.get("traders", {}).get(trader_id, {}).get("pid")
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            del active_processes[trader_id]
+        elif _pid_is_running(pid):
+            _stop_pid(pid)
+        else:
             if trader_id in config.get("traders", {}):
                 config["traders"][trader_id]["status"] = "stopped"
+                config["traders"][trader_id].pop("pid", None)
                 save_system_config(config)
             return jsonify({"status": "already_stopped"}), 200
             
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        del active_processes[trader_id]
-        
     if trader_id in config.get("traders", {}):
         config["traders"][trader_id]["status"] = "stopped"
+        config["traders"][trader_id].pop("pid", None)
         save_system_config(config)
         
     return jsonify({"status": "stopped"}), 200

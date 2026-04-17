@@ -1,0 +1,168 @@
+{
+  "generated_at": "2026-04-16 14:07:22",
+  "base_dir": "/Users/jiamiweilai/Desktop/openclaw-trading-bot",
+  "records_exported": 360,
+  "source_files": 3,
+  "source_groups": {
+    "history": 142,
+    "live_session": 218
+  },
+  "sessions": {
+    "20260313_170854": 140,
+    "20260314_102532_178068": 2,
+    "trader_1775783420406": 218
+  },
+  "assets": {
+    "SOL": 42,
+    "XRP": 22,
+    "SUI": 6,
+    "DOGE": 3,
+    "MLN": 2,
+    "AIA": 2,
+    "AIN": 2,
+    "FLOW": 16,
+    "BTC": 167,
+    "ARIA": 2,
+    "ADA": 24,
+    "ETH": 67,
+    "PIXEL": 5
+  },
+  "time_range": {
+    "start": "2026-03-10 12:00:38",
+    "end": "2026-04-16 13:45:08"
+  },
+  "notes": [
+    "amount is exported as recorded in the source file; for swap records it may be contract size rather than quote turnover.",
+    "live_session records come from local trades.json and may include failed order attempts plus pnl values that remain 0."
+  ],
+  "warnings": [],
+  "by_asset": [
+    {
+      "asset": "BTC",
+      "records": 167,
+      "open_records": 92,
+      "close_records": 75,
+      "failed_records": 19,
+      "pnl_sum": -5.1547
+    },
+    {
+      "asset": "ETH",
+      "records": 67,
+      "open_records": 38,
+      "close_records": 29,
+      "failed_records": 3,
+      "pnl_sum": 4.3485
+    },
+    {
+      "asset": "SOL",
+      "records": 42,
+      "open_records": 24,
+      "close_records": 18,
+      "failed_records": 0,
+      "pnl_sum": -2.7093
+    },
+    {
+      "asset": "ADA",
+      "records": 24,
+      "open_records": 15,
+      "close_records": 9,
+      "failed_records": 0,
+      "pnl_sum": -1.1142
+    },
+    {
+      "asset": "XRP",
+      "records": 22,
+      "open_records": 11,
+      "close_records": 11,
+      "failed_records": 0,
+      "pnl_sum": 1.9206
+    },
+    {
+      "asset": "FLOW",
+      "records": 16,
+      "open_records": 8,
+      "close_records": 8,
+      "failed_records": 0,
+      "pnl_sum": -7.8332
+    },
+    {
+      "asset": "SUI",
+      "records": 6,
+      "open_records": 3,
+      "close_records": 3,
+      "failed_records": 0,
+      "pnl_sum": 0.0181
+    },
+    {
+      "asset": "PIXEL",
+      "records": 5,
+      "open_records": 3,
+      "close_records": 2,
+      "failed_records": 0,
+      "pnl_sum": -2.876
+    },
+    {
+      "asset": "DOGE",
+      "records": 3,
+      "open_records": 1,
+      "close_records": 2,
+      "failed_records": 0,
+      "pnl_sum": 0.1211
+    },
+    {
+      "asset": "AIA",
+      "records": 2,
+      "open_records": 1,
+      "close_records": 1,
+      "failed_records": 0,
+      "pnl_sum": 0.1276
+    },
+    {
+      "asset": "AIN",
+      "records": 2,
+      "open_records": 1,
+      "close_records": 1,
+      "failed_records": 0,
+      "pnl_sum": -29.5636
+    },
+    {
+      "asset": "ARIA",
+      "records": 2,
+      "open_records": 1,
+      "close_records": 1,
+      "failed_records": 0,
+      "pnl_sum": -1.3754
+    },
+    {
+      "asset": "MLN",
+      "records": 2,
+      "open_records": 1,
+      "close_records": 1,
+      "failed_records": 0,
+      "pnl_sum": 1.2767
+    }
+  ],
+  "by_session": [
+    {
+      "session_id": "trader_1775783420406",
+      "source_group": "live_session",
+      "records": 218,
+      "failed_records": 22,
+      "pnl_sum": 0.0
+    },
+    {
+      "session_id": "20260313_170854",
+      "source_group": "history",
+      "records": 140,
+      "failed_records": 0,
+      "pnl_sum": -42.8138
+    },
+    {
+      "session_id": "20260314_102532_178068",
+      "source_group": "history",
+      "records": 2,
+      "failed_records": 0,
+      "pnl_sum": 0.0
+    }
+  ]
+}

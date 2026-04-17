@@ -15,9 +15,18 @@ let chart = null;
         const initialBalance = 0;
         const majorCoins = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'ADA', 'LINK', 'AVAX', 'LTC'];
 
+        function getLocalApiUrl(path) {
+            return `${LOCAL_API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+        }
+
         function formatSigned(value, digits = 2) {
             const safeValue = Number(value) || 0;
             return `${safeValue > 0 ? '+' : ''}${safeValue.toFixed(digits)}`;
+        }
+
+        function getConfiguredStartBalance(traderId = activeTraderId) {
+            const value = Number(cachedSystemConfig?.traders?.[traderId]?.initial_balance);
+            return Number.isFinite(value) && value > 0 ? value : null;
         }
 
         function formatRuntime(diffMs) {
@@ -306,10 +315,8 @@ let chart = null;
         }
 
         function updateStrategy(status) {
-            const displayStrategy = resolveDisplayStrategy(status);
-            document.getElementById('strategySummary').textContent = displayStrategy.summaryText;
-            document.getElementById('strategyHeroLeverage').textContent = displayStrategy.leverageText || '--';
-            document.getElementById('strategyCoins').textContent = (displayStrategy.coins && displayStrategy.coins.length > 0) ? displayStrategy.coins.join(', ') : '--';
+            const skillName = status?.strategy_v2?.skill || status?.strategy_v2?.name || '--';
+            document.getElementById('strategySummary').textContent = skillName;
         }
 
         function updateStatus(status) {
@@ -358,7 +365,7 @@ let chart = null;
             updateMetric('winRate', '--', 'neutral');
 
             document.getElementById('positionTable').innerHTML =
-                '<tr><td colspan="7" class="table-empty">新会话已开始，等待持仓</td></tr>';
+                '<tr><td colspan="6" class="table-empty">新会话已开始，等待持仓</td></tr>';
             document.getElementById('tradeTable').innerHTML =
                 '<tr><td colspan="7" class="table-empty">新会话已开始，等待交易记录</td></tr>';
             document.getElementById('thinkingList').innerHTML =
@@ -690,15 +697,16 @@ let chart = null;
             const positions = Array.isArray(status?.open_positions) ? status.open_positions : [];
 
             if (!positions.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="table-empty">当前空仓</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">当前空仓</td></tr>';
                 return;
             }
 
             tbody.innerHTML = positions.map((position) => {
                 const direction = (position.direction || 'long') === 'short' ? 'short' : 'long';
-                const entryPrice = Number(position.entryPrice) || 0;
-                const currentPrice = Number(position.markPrice) || Number(marketState?.price) || entryPrice;
                 const unrealized = Number(position.unrealizedProfit) || 0;
+                const margin = Number(position.margin) || 0;
+                const leverage = Number(position.leverage) || 1;
+                const posValue = (margin * leverage).toFixed(2);
                 const pnlClass = unrealized > 0 ? 'pnl-positive' : unrealized < 0 ? 'pnl-negative' : 'pnl-flat';
                 const openedTrade = Array.isArray(trades)
                     ? [...trades].reverse().find((trade) => {
@@ -714,9 +722,8 @@ let chart = null;
                         <td>${formatBeijingCompact(openedTrade?.time)}</td>
                         <td><span class="dir-badge ${direction}">${direction === 'long' ? '做多' : '做空'}</span></td>
                         <td>${(position.symbol || '--').replace('USDT', '')}</td>
-                        <td>${entryPrice.toFixed(2)}</td>
-                        <td>${currentPrice.toFixed(2)}</td>
                         <td>${position.leverage ? `${position.leverage}x` : '--'}</td>
+                        <td>${posValue} USDT</td>
                         <td class="${pnlClass}">${formatSigned(unrealized)} USDT</td>
                     </tr>
                 `;
@@ -740,7 +747,7 @@ let chart = null;
                 const isCurrentOpenTrade = openTrade === trade && openPosition;
                 const pnl = isCurrentOpenTrade ? Number(openPosition.unrealizedProfit) : Number(trade.pnl);
                 const pnlClass = Number.isFinite(pnl) ? (pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : 'pnl-flat') : 'pnl-flat';
-                const pnlText = Number.isFinite(pnl) ? formatSigned(pnl) : '--';
+                const pnlText = (isCurrentOpenTrade || (Number.isFinite(pnl) && pnl !== 0)) ? formatSigned(pnl) : '--';
                 const tradeText = isBuy ? '买入' : '卖出';
                 const directionText = direction === 'long' ? '做多' : '做空';
 
@@ -760,7 +767,8 @@ let chart = null;
 
         function buildChartSeries(trades, status) {
             const startTime = latestSession?.started_at || latestStatus?.session_started_at || tradingStartTime;
-            const startBalance = Number(status?.start_balance) || Number(latestStatus?.start_balance) || initialBalance;
+            const configuredStartBalance = getConfiguredStartBalance();
+            const startBalance = configuredStartBalance || Number(status?.start_balance) || Number(latestStatus?.start_balance) || initialBalance;
             const equityHistory = Array.isArray(status?.equity_history) ? status.equity_history : [];
             const currentEquity = Number(status?.equity) || Number(status?.balance) || startBalance;
             if (!trades || !trades.length) {
@@ -1027,8 +1035,9 @@ let chart = null;
                 updateStrategy(latestStatus);
                 updateStatus(latestStatus);
 
-                const currentBalance = (latestStatus?.equity != null) ? Number(latestStatus.equity) : ((latestStatus?.balance != null) ? Number(latestStatus.balance) : initialBalance);
-                const baseCapital = (latestStatus?.start_balance != null) ? Number(latestStatus.start_balance) : initialBalance;
+                const configuredStartBalance = getConfiguredStartBalance();
+                const baseCapital = configuredStartBalance || ((latestStatus?.start_balance != null) ? Number(latestStatus.start_balance) : initialBalance);
+                const currentBalance = (latestStatus?.equity != null) ? Number(latestStatus.equity) : ((latestStatus?.balance != null) ? Number(latestStatus.balance) : baseCapital);
                 const totalPnl = (currentBalance - baseCapital);
                 const tradesSinceStart = latestTrades.length;
                 const closedTrades = latestTrades.filter((t) => String(t.tradeAction).toUpperCase() === 'CLOSE');
@@ -1064,7 +1073,7 @@ let chart = null;
 
         async function fetchSystemSettings() {
             try {
-                const res = await fetch('/api/system/config');
+                const res = await fetch(getLocalApiUrl('/api/system/config'));
                 if(res.ok) {
                     const settings = await res.json();
                     cachedSystemConfig = settings;
@@ -1133,10 +1142,14 @@ let chart = null;
         async function fetchTradersList() {
             if (isEditingTrader) return;
             try {
-                const res = await fetch('/api/traders');
+                const res = await fetch(getLocalApiUrl('/api/traders'));
                 if(res.ok) {
                     const data = await res.json();
                     const traders = data.traders || {};
+                    cachedSystemConfig = {
+                        ...(cachedSystemConfig || {}),
+                        traders,
+                    };
                     const select = document.getElementById('activeTraderSelect');
                     const cVal = select.value;
                     select.innerHTML = '';
@@ -1160,6 +1173,13 @@ let chart = null;
                         const statusColor = info.status === 'running' ? '#00f7b2' : '#ff5f7c';
                         const isRunning = info.status === 'running';
                         const freq = info.scan_frequency || 30;
+                        const configuredStartBalance = Number(info.initial_balance);
+                        const initialBalanceValue = Number.isFinite(configuredStartBalance) && configuredStartBalance > 0
+                            ? configuredStartBalance
+                            : '';
+                        const initialBalanceMeta = initialBalanceValue !== ''
+                            ? `<span>💰 初始 ${configuredStartBalance.toFixed(2)} USDT</span>`
+                            : '';
                         
                         listContainer.innerHTML += `
                         <div id="trader-card-${tid}" style="border: 1px solid rgba(118,167,255,0.2); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 8px;">
@@ -1170,6 +1190,7 @@ let chart = null;
                                         <span>🤖 ${info.ai_provider || '--'}</span>
                                         <span>📈 ${info.exchange || '--'}</span>
                                         <span>⏱️ ${freq}s</span>
+                                            ${initialBalanceMeta}
                                     </div>
                                 </div>
                                 <div style="display:flex; gap:6px; flex-shrink:0;">
@@ -1185,6 +1206,7 @@ let chart = null;
                                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                                     <div class="form-group"><label class="form-label">名称</label><input class="form-input" id="edit-name-${tid}" value="${info.name}"></div>
                                     <div class="form-group"><label class="form-label">扫描频率(秒)</label><input class="form-input" id="edit-freq-${tid}" type="number" value="${freq}"></div>
+                                        <div class="form-group"><label class="form-label">初始交易金额 (USDT)</label><input class="form-input" id="edit-initial-balance-${tid}" type="number" min="0" step="0.01" value="${initialBalanceValue}" placeholder="留空则自动取首次净值"></div>
                                     <div class="form-group"><label class="form-label">绑定 AI</label><select class="form-input form-select" id="edit-ai-${tid}"></select></div>
                                     <div class="form-group"><label class="form-label">绑定交易所</label><select class="form-input form-select" id="edit-ex-${tid}"></select></div>
                                 </div>
@@ -1204,9 +1226,9 @@ let chart = null;
             } catch(e){}
         }
 
-        window.startTrader = async function(tid) { await fetch(`/api/traders/${tid}/start`, {method:'POST'}); fetchTradersList(); }
-        window.stopTrader = async function(tid) { await fetch(`/api/traders/${tid}/stop`, {method:'POST'}); fetchTradersList(); }
-        window.deleteTrader = async function(tid) { if(!confirm('确定删除该交易员？')) return; await fetch(`/api/traders/${tid}`, {method:'DELETE'}); fetchTradersList(); }
+        window.startTrader = async function(tid) { await fetch(getLocalApiUrl(`/api/traders/${tid}/start`), {method:'POST'}); fetchTradersList(); }
+        window.stopTrader = async function(tid) { await fetch(getLocalApiUrl(`/api/traders/${tid}/stop`), {method:'POST'}); fetchTradersList(); }
+        window.deleteTrader = async function(tid) { if(!confirm('确定删除该交易员？')) return; await fetch(getLocalApiUrl(`/api/traders/${tid}`), {method:'DELETE'}); fetchTradersList(); }
 
         window.editTrader = function(tid) {
             isEditingTrader = true;
@@ -1242,16 +1264,23 @@ let chart = null;
         window.saveEditTrader = async function(tid) {
             const name = document.getElementById(`edit-name-${tid}`).value.trim();
             const freq = document.getElementById(`edit-freq-${tid}`).value.trim();
+            const initialBalance = document.getElementById(`edit-initial-balance-${tid}`).value.trim();
             const ai = document.getElementById(`edit-ai-${tid}`).value;
             const ex = document.getElementById(`edit-ex-${tid}`).value;
-            await fetch('/api/traders', {
+            const res = await fetch(getLocalApiUrl('/api/traders'), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id: tid, name, scan_frequency: freq, ai_provider: ai, exchange: ex })
+                body: JSON.stringify({ id: tid, name, scan_frequency: freq, initial_balance: initialBalance, ai_provider: ai, exchange: ex })
             });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                alert(data.message || '保存交易员配置失败');
+                return;
+            }
             isEditingTrader = false;
             await fetchTradersList();
             await fetchSystemSettings();
+            await loadData();
         }
 
         function switchTab_old(tab) {
@@ -1293,7 +1322,7 @@ let chart = null;
                 };
             }
             try {
-                const res = await fetch('/api/system/config', {
+                const res = await fetch(getLocalApiUrl('/api/system/config'), {
                     method:'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(updates)
@@ -1368,7 +1397,7 @@ let chart = null;
             }
             label.textContent = tid;
             try {
-                const res = await fetch(`/api/traders/${tid}/skill`);
+                const res = await fetch(getLocalApiUrl(`/api/traders/${tid}/skill`));
                 if (res.ok) {
                     const data = await res.json();
                     document.getElementById('skillContentEditor').value = data.skill_content || '';
@@ -1381,7 +1410,7 @@ let chart = null;
             if (!tid) { alert('请先选择一个交易员实例'); return; }
             const content = document.getElementById('skillContentEditor').value;
             try {
-                const res = await fetch(`/api/traders/${tid}/skill`, {
+                const res = await fetch(getLocalApiUrl(`/api/traders/${tid}/skill`), {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ skill_content: content, skill_filename: 'SKILL.md' })
@@ -1414,7 +1443,7 @@ let chart = null;
             const formData = new FormData(e.target);
             const body = {};
             formData.forEach((val, key) => { body[key] = val; });
-            await fetch('/api/system/config', {
+            await fetch(getLocalApiUrl('/api/system/config'), {
                 method:'POST',
                 headers: {'Content-Type':'application/json'},
                 body: JSON.stringify(body)
@@ -1426,10 +1455,16 @@ let chart = null;
         document.getElementById('newTraderForm').addEventListener('submit', async(e)=>{
             e.preventDefault();
             const formData = new FormData(e.target);
-            await fetch('/api/traders', {method:'POST', body:formData});
+            const res = await fetch(getLocalApiUrl('/api/traders'), {method:'POST', body:formData});
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                alert(data.message || '创建交易员失败');
+                return;
+            }
             e.target.reset();
             document.getElementById('createTraderForm').style.display = 'none';
             fetchTradersList();
+            fetchSystemSettings();
         });
 
 

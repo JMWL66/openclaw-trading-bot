@@ -47,11 +47,27 @@ def _check_cli() -> bool:
 
 def _run_cli(args: list[str], timeout: int = 30) -> dict | list | None:
     cmd = ["okx"] + args + ["--json"]
-    logger.debug(f"CLI: {' '.join(cmd)}")
+    logger.info(f"CLI exec: {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             logger.error(f"CLI error (rc={result.returncode}): {result.stderr.strip()}")
+            if result.stdout.strip():
+                logger.error(f"  stdout: {result.stdout.strip()[:500]}")
+            # Still try to parse stdout for error details
+            stdout = result.stdout.strip()
+            if stdout:
+                for i, ch in enumerate(stdout):
+                    if ch in ("{", "["):
+                        try:
+                            parsed = json.loads(stdout[i:])
+                            # Return error info for better diagnostics
+                            if isinstance(parsed, list) and parsed:
+                                err_msg = parsed[0].get("sMsg", "")
+                                logger.error(f"  OKX error: {err_msg}")
+                            return None
+                        except json.JSONDecodeError:
+                            pass
             return None
         stdout = result.stdout.strip()
         if not stdout:
@@ -67,6 +83,7 @@ def _run_cli(args: list[str], timeout: int = 30) -> dict | list | None:
         logger.error(f"CLI JSON parse error: {e}")
         return None
     except FileNotFoundError:
+        logger.error("CLI binary 'okx' not found on PATH")
         return None
 
 
@@ -217,12 +234,10 @@ def place_order(
             args += ["--posSide", pos_side]
         if sl_trigger_px:
             args += ["--slTriggerPx", str(sl_trigger_px)]
-        if sl_ord_px:
-            args += ["--slOrdPx", str(sl_ord_px)]
+            args += ["--slOrdPx", str(sl_ord_px) if sl_ord_px else "-1"]
         if tp_trigger_px:
             args += ["--tpTriggerPx", str(tp_trigger_px)]
-        if tp_ord_px:
-            args += ["--tpOrdPx", str(tp_ord_px)]
+            args += ["--tpOrdPx", str(tp_ord_px) if tp_ord_px else "-1"]
         return _run_cli(args)
     # REST
     payload: dict[str, Any] = {
@@ -246,6 +261,51 @@ def place_order(
     if isinstance(data, list) and data:
         return data[0]
     return data if isinstance(data, dict) else {"error": "order failed"}
+
+
+def place_algo_order(
+    inst_id: str,
+    side: str,
+    sz: str,
+    tp_trigger_px: str | None = None,
+    sl_trigger_px: str | None = None,
+    td_mode: str = "cross",
+) -> dict | None:
+    """Place a conditional (algo) stop-loss / take-profit order."""
+    if _check_cli():
+        args = [
+            "swap", "place-algo-order",
+            "--instId", inst_id,
+            "--side", side,
+            "--ordType", "conditional",
+            "--sz", str(sz),
+            "--tdMode", td_mode,
+        ]
+        if sl_trigger_px:
+            args += ["--slTriggerPx", str(sl_trigger_px)]
+            args += ["--slOrdPx", "-1"]
+        if tp_trigger_px:
+            args += ["--tpTriggerPx", str(tp_trigger_px)]
+            args += ["--tpOrdPx", "-1"]
+        return _run_cli(args)
+    # REST
+    payload: dict[str, Any] = {
+        "instId": inst_id,
+        "tdMode": td_mode,
+        "side": side,
+        "ordType": "conditional",
+        "sz": str(sz),
+    }
+    if sl_trigger_px:
+        payload["slTriggerPx"] = str(sl_trigger_px)
+        payload["slOrdPx"] = "-1"
+    if tp_trigger_px:
+        payload["tpTriggerPx"] = str(tp_trigger_px)
+        payload["tpOrdPx"] = "-1"
+    data = _rest_post("/api/v5/trade/order-algo", payload)
+    if isinstance(data, list) and data:
+        return data[0]
+    return data if isinstance(data, dict) else None
 
 
 def close_position(inst_id: str, margin_mode: str = "cross") -> dict | None:
@@ -309,6 +369,116 @@ def get_open_interest(inst_id: str) -> dict | None:
     return None
 
 
+# ──────────────── Technical Indicators ────────────────
+
+def compute_rsi(candles: list, period: int = 14) -> float | None:
+    """Compute RSI from candle data. Candles are [ts, o, h, l, c, vol, ...].
+    Returns RSI value (0-100) or None if insufficient data.
+    """
+    if len(candles) < period + 1:
+        return None
+    # Extract close prices (index 4), candles are newest-first from OKX
+    closes = [float(c[4]) for c in reversed(candles) if isinstance(c, list) and len(c) >= 5]
+    if len(closes) < period + 1:
+        return None
+
+    gains = []
+    losses = []
+    for i in range(1, len(closes)):
+        delta = closes[i] - closes[i - 1]
+        gains.append(max(0, delta))
+        losses.append(max(0, -delta))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    # Smoothed RSI (Wilder's method)
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+# ──────────────── Hot-list Scanner ────────────────
+
+# Tokens excluded from dynamic hot-list (majors + stables)
+_EXCLUDE_BASE = {
+    "BTC", "ETH", "USDC", "DAI", "TUSD", "FDUSD", "USDT",
+    "BUSD", "EUR", "GBP", "BNB",
+}
+
+
+def get_all_swap_tickers(quote_ccy: str = "USDT") -> list:
+    """Return all live USDT-margined SWAP tickers from OKX (public endpoint)."""
+    if _check_cli():
+        # @okx_ai/okx-trade-cli v1.3.0 expects instType as a positional arg.
+        data = _run_cli(["market", "tickers", "SWAP"])
+        if isinstance(data, list):
+            return [t for t in data
+                    if str(t.get("instId", "")).endswith(f"-{quote_ccy}-SWAP")]
+    # REST fallback (always available, no auth needed)
+    data = _rest_get(f"/api/v5/market/tickers?instType=SWAP")
+    if isinstance(data, list):
+        return [t for t in data
+                if str(t.get("instId", "")).endswith(f"-{quote_ccy}-SWAP")]
+    return []
+
+
+def get_top_gainers(
+    min_vol_usdt: float = 20_000_000,
+    min_gain_pct: float = 10.0,
+    max_gain_pct: float = 200.0,
+    top_n: int = 10,
+) -> list:
+    """
+    Scan all USDT SWAP tickers and return inst_ids of top N 24h gainers.
+
+    Filters applied:
+      - 24h USDT volume >= min_vol_usdt  (liquidity gate)
+      - 24h gain in [min_gain_pct, max_gain_pct]  (momentum gate, avoids blow-off tops)
+      - Excludes BTC, ETH, stablecoins
+
+    Returns list of inst_id strings e.g. ["ORDI-USDT-SWAP", "1000SATS-USDT-SWAP", ...]
+    """
+    tickers = get_all_swap_tickers()
+    if not tickers:
+        logger.warning("get_top_gainers: received no tickers")
+        return []
+
+    candidates: list[tuple[float, float, str]] = []
+    for t in tickers:
+        inst_id: str = t.get("instId", "")
+        base = inst_id.split("-")[0]
+        if base in _EXCLUDE_BASE:
+            continue
+        try:
+            last      = float(t.get("last",       0) or 0)
+            open24h   = float(t.get("open24h",    0) or 0)
+            vol_usdt  = float(t.get("volCcy24h",  0) or 0)  # already in USDT
+        except (ValueError, TypeError):
+            continue
+
+        if last <= 0 or open24h <= 0 or vol_usdt < min_vol_usdt:
+            continue
+
+        gain_pct = (last - open24h) / open24h * 100.0
+        if not (min_gain_pct <= gain_pct <= max_gain_pct):
+            continue
+
+        candidates.append((gain_pct, vol_usdt, inst_id))
+
+    # Sort: highest gain first; break ties by volume
+    candidates.sort(key=lambda x: (-x[0], -x[1]))
+    result = [c[2] for c in candidates[:top_n]]
+    logger.info(f"Top gainers ({len(result)}): "
+                + ", ".join(f"{c[2]}(+{c[0]:.1f}%)" for c in candidates[:top_n]))
+    return result
+
+
 # ──────────────── Helpers ────────────────
 
 def normalize_inst_id(symbol: str) -> str:
@@ -337,15 +507,19 @@ def get_market_summary(instruments: list[str]) -> dict[str, Any]:
 
         entry: dict[str, Any] = {"ticker": ticker, "inst_id": inst_id}
 
-        # K-line data (1H latest 6 bars, 4H latest 6 bars)
+        # K-line data (1H latest 24 bars, 4H latest 12 bars) — enough for RSI(14)
         try:
-            entry["candles_1h"] = get_candles(inst_id, bar="1H", limit=6)
+            entry["candles_1h"] = get_candles(inst_id, bar="1H", limit=24)
         except Exception:
             entry["candles_1h"] = []
         try:
-            entry["candles_4h"] = get_candles(inst_id, bar="4H", limit=6)
+            entry["candles_4h"] = get_candles(inst_id, bar="4H", limit=12)
         except Exception:
             entry["candles_4h"] = []
+
+        # Pre-compute RSI
+        entry["rsi_1h"] = compute_rsi(entry.get("candles_1h", []), period=14)
+        entry["rsi_4h"] = compute_rsi(entry.get("candles_4h", []), period=14)
 
         # Funding rate
         try:
@@ -361,4 +535,3 @@ def get_market_summary(instruments: list[str]) -> dict[str, Any]:
 
         summary[inst_id] = entry
     return summary
-

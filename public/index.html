@@ -189,18 +189,6 @@
                                 <div class="strategy-kicker">当前策略</div>
                                 <div class="strategy-summary" id="strategySummary">--</div>
                             </div>
-                            <div class="strategy-leverage">
-                                <span>杠杆</span>
-                                <strong id="strategyHeroLeverage">--</strong>
-                            </div>
-                        </div>
-
-                        <div class="strategy-lines">
-                            <div class="strategy-line">
-                                <span>交易币种</span>
-                                <strong id="strategyCoins">--</strong>
-                            </div>
-
                         </div>
                     </div>
                 </section>
@@ -227,14 +215,13 @@
                                     <th>时间</th>
                                     <th>方向</th>
                                     <th>币种</th>
-                                    <th>开仓价</th>
-                                    <th>现价</th>
                                     <th>杠杆</th>
+                                    <th>持仓市值</th>
                                     <th>盈亏</th>
                                 </tr>
                             </thead>
                             <tbody id="positionTable">
-                                <tr><td colspan="7" class="table-empty">暂无持仓</td></tr>
+                                <tr><td colspan="6" class="table-empty">暂无持仓</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -426,6 +413,7 @@
                         <div class="form-group"><label class="form-label">绑定 AI 节点</label><select name="ai_provider" id="form_ai_provider" class="form-input form-select"></select></div>
                         <div class="form-group"><label class="form-label">绑定 交易所</label><select name="exchange" id="form_exchange" class="form-input form-select"></select></div>
                         <div class="form-group"><label class="form-label">扫描频率(秒)</label><input type="number" name="scan_frequency" class="form-input" value="30"></div>
+                        <div class="form-group"><label class="form-label">初始交易金额 (USDT)</label><input type="number" name="initial_balance" class="form-input" min="0" step="0.01" placeholder="留空则自动取首次净值"></div>
                         <div class="form-group"><label class="form-label">上传 AI 策略 Skill 文件</label><input type="file" name="skill_file" class="form-input"></div>
                         <div class="form-actions" style="margin-top:10px;">
                             <button type="button" class="btn btn-cancel" onclick="document.getElementById('createTraderForm').style.display='none'">取消</button>

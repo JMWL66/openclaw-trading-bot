@@ -32,6 +32,20 @@ def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def to_positive_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def load_trader_initial_balance(trader_id: str) -> float | None:
+    config = load_system_config()
+    trader_info = config.get("traders", {}).get(trader_id, {})
+    return to_positive_float(trader_info.get("initial_balance"))
+
+
 def load_skill_content(trader_info: dict) -> str:
     """Load SKILL.md content from trader config or default file."""
     content = trader_info.get("skill_content", "")
@@ -55,9 +69,9 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.FileHandler(session_dir / "engine.log"),
             logging.StreamHandler(),
         ],
+        force=True,
     )
 
     logging.info(f"Starting AI Trader: {trader_id}")
@@ -72,6 +86,7 @@ def main():
     freq = int(trader_info.get("scan_frequency", 30))
     skill_content = load_skill_content(trader_info)
     watchlist = trader_info.get("watchlist", ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"])
+    configured_start_balance = load_trader_initial_balance(trader_id)
 
     # Initialize MiniMax engine
     minimax_key = os.environ.get("MINIMAX_API_KEY", "")
@@ -104,6 +119,10 @@ def main():
         except Exception:
             pass
 
+    if configured_start_balance is not None:
+        start_balance = configured_start_balance
+        logging.info(f"Using configured start balance: {configured_start_balance:.2f} USDT")
+
     if thinking_file.exists():
         try:
             old_thinking = json.loads(thinking_file.read_text(encoding="utf-8"))
@@ -129,9 +148,9 @@ def main():
         """Fetch open positions from OKX."""
         return okx_client.get_positions("SWAP")
 
-    def fetch_market_data() -> dict:
-        """Fetch market data for all watchlist instruments."""
-        return okx_client.get_market_summary(watchlist)
+    def fetch_market_data(instruments: list | None = None) -> dict:
+        """Fetch market data for instruments (defaults to static watchlist)."""
+        return okx_client.get_market_summary(instruments or watchlist)
 
     def execute_decision(decision: dict) -> dict | None:
         """Execute a trade decision via OKX CLI."""
@@ -147,37 +166,55 @@ def main():
         inst_id = okx_client.normalize_inst_id(inst_id)
 
         try:
-            if action == "OPEN_LONG":
+            if action in ("OPEN_LONG", "OPEN_SHORT"):
+                side = "buy" if action == "OPEN_LONG" else "sell"
                 leverage = decision.get("leverage", 10)
-                okx_client.set_leverage(inst_id, leverage)
-                result = okx_client.place_order(
-                    inst_id=inst_id,
-                    side="buy",
-                    ord_type="market",
-                    sz=str(decision.get("size", 1)),
-                    td_mode="cross",
-                    sl_trigger_px=str(decision["stop_loss"]) if decision.get("stop_loss") else None,
-                    tp_trigger_px=str(decision["take_profit"]) if decision.get("take_profit") else None,
-                )
-                return {"type": "OPEN_LONG", "result": result}
+                sz = str(max(1, int(round(float(decision.get("size", 1))))))
 
-            elif action == "OPEN_SHORT":
-                leverage = decision.get("leverage", 10)
                 okx_client.set_leverage(inst_id, leverage)
                 result = okx_client.place_order(
                     inst_id=inst_id,
-                    side="sell",
+                    side=side,
                     ord_type="market",
-                    sz=str(decision.get("size", 1)),
+                    sz=sz,
                     td_mode="cross",
-                    sl_trigger_px=str(decision["stop_loss"]) if decision.get("stop_loss") else None,
-                    tp_trigger_px=str(decision["take_profit"]) if decision.get("take_profit") else None,
                 )
-                return {"type": "OPEN_SHORT", "result": result}
+                if not result:
+                    return {"type": action, "error": "Order placement failed (check engine/CLI logs)"}
+
+                # Place independent algo order for TP/SL (spec requirement)
+                sl_px = decision.get("stop_loss")
+                tp_px = decision.get("take_profit")
+                if sl_px or tp_px:
+                    algo_side = "sell" if action == "OPEN_LONG" else "buy"
+                    try:
+                        okx_client.place_algo_order(
+                            inst_id=inst_id,
+                            side=algo_side,
+                            sz=sz,
+                            sl_trigger_px=str(sl_px) if sl_px else None,
+                            tp_trigger_px=str(tp_px) if tp_px else None,
+                        )
+                        logging.info(f"Algo order placed: SL={sl_px}, TP={tp_px}")
+                    except Exception as e:
+                        logging.warning(f"Algo order failed (non-fatal): {e}")
+
+                return {"type": action, "result": result}
 
             elif action in ("CLOSE_LONG", "CLOSE_SHORT"):
+                # Capture unrealized PnL before closing so we can record it
+                realized_pnl = 0.0
+                try:
+                    for p in okx_client.get_positions("SWAP"):
+                        if p.get("instId") == inst_id:
+                            realized_pnl = float(p.get("upl", 0) or 0)
+                            break
+                except Exception:
+                    pass
                 result = okx_client.close_position(inst_id)
-                return {"type": action, "result": result}
+                if not result:
+                    return {"type": action, "error": "Close position failed (check engine/CLI logs)"}
+                return {"type": action, "result": result, "realized_pnl": realized_pnl}
 
         except Exception as e:
             logging.error(f"Trade execution error: {e}")
@@ -186,7 +223,18 @@ def main():
         return None
 
     def save_state(account: dict, positions: list, market_data: dict):
-        nonlocal start_balance
+        nonlocal configured_start_balance, start_balance
+
+        latest_configured_start_balance = load_trader_initial_balance(trader_id)
+        if (
+            latest_configured_start_balance is not None
+            and latest_configured_start_balance != configured_start_balance
+        ):
+            configured_start_balance = latest_configured_start_balance
+            start_balance = latest_configured_start_balance
+            logging.info(
+                f"Updated configured start balance: {latest_configured_start_balance:.2f} USDT"
+            )
 
         total_eq = float(account.get("totalEq", 0))
         details = account.get("details", [])
@@ -260,6 +308,7 @@ def main():
             "source": "minimax_ai",
             "strategy_v2": {
                 "name": trader_info.get("name", "OKX AI Strategy"),
+                "skill": trader_info.get("skill_filename", "SKILL.md"),
                 "entryLogic": "MiniMax AI 分析决策",
                 "riskGuard": "SKILL.md 风控规则",
             },
@@ -286,9 +335,26 @@ def main():
         cycle_start = time.time()
 
         try:
+            # 0. Build dynamic watchlist from 24h gainers leaderboard
+            effective_watchlist = watchlist  # fallback to static config
+            try:
+                gainers = okx_client.get_top_gainers(
+                    min_vol_usdt=20_000_000,
+                    min_gain_pct=10.0,
+                    max_gain_pct=200.0,
+                    top_n=10,
+                )
+                if gainers:
+                    effective_watchlist = gainers
+                    logging.info(f"Dynamic watchlist ({len(gainers)}): {gainers}")
+                else:
+                    logging.warning("No gainers found this cycle, using static watchlist")
+            except Exception as _e:
+                logging.warning(f"Gainer scan failed ({_e}), using static watchlist")
+
             # 1. Fetch market data
             logging.info("Fetching market data from OKX...")
-            market_data = fetch_market_data()
+            market_data = fetch_market_data(effective_watchlist)
             if not market_data:
                 logging.warning("No market data received, retrying next cycle.")
                 events.append({
@@ -355,7 +421,7 @@ def main():
                         "tradeAction": "OPEN" if "OPEN" in decision["action"] else "CLOSE",
                         "reason": decision.get("reasoning", "")[:200],
                         "confidence": decision.get("confidence", 0),
-                        "pnl": 0,
+                        "pnl": exec_result.get("realized_pnl", 0),
                     }
 
                     # Try to fill price from market data
